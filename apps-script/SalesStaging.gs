@@ -266,12 +266,15 @@ function stagingEnsureMovement_(ss,m,kind) {
   if (old.length) {
     const v=old[0];
     if (v.code!==m.code || v.qty!==m.qty || v.doc!==m.doc ||
-        ![kind==='SALE'?'เตรียมจ่าย':'เตรียมรับคืน',kind==='SALE'?'จ่ายออก':'รับเข้า'].includes(v.type))
+        !['',kind==='SALE'?'เตรียมจ่าย':'เตรียมรับคืน',kind==='SALE'?'จ่ายออก':'รับเข้า'].includes(v.type))
       throw new Error('MovementID เดิมไม่ตรงข้อมูลที่ต้องบันทึก: '+m.id);
     return v.row;
   }
   const row=stagingFreeRow_(sh,4);
-  const f=mvFormulas_(row),type=kind==='SALE'?'เตรียมจ่าย':'เตรียมรับคืน';
+  // Movement type dropdown only permits รับเข้า / จ่ายออก. A blank B cell is
+  // the resumable, inert PREPARED phase, identified by its stable MovementID.
+  // Posting changes B once to an allowed value after all lines are prepared.
+  const f=mvFormulas_(row),type='';
   const who=me_(),now=new Date();
   sh.getRange(row,1,1,16).setValues([[
     now,type,m.code,f[0],m.qty,f[1],m.price,f[2],
