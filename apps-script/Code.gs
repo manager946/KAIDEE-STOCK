@@ -200,7 +200,7 @@ function assertNoNegative_(items, mvAfter, codes) {
 }
 function checkMove_(m, items) {
   if (m.type !== 'รับเข้า' && m.type !== 'จ่ายออก') throw new Error('ประเภทรายการไม่ถูกต้อง');
-  if (!(Number(m.qty) > 0)) throw new Error('จำนวนต้องมากกว่า 0');
+  if (!Number.isFinite(Number(m.qty)) || Number(m.qty) <= 0) throw new Error('จำนวนต้องเป็นตัวเลขที่มากกว่า 0');
   if (!items.some(i => i[0] === String(m.code))) throw new Error('ไม่พบรหัสสินค้า ' + m.code);
   if (m.date && !parseDate_(m.date)) throw new Error('วันที่ไม่ถูกต้อง');
 }
@@ -271,6 +271,8 @@ function role_() {
   return 'public';
 }
 function requireStaff_() { if (role_() === 'public') throw new Error('ส่วนนี้สำหรับพนักงานหลังบ้านเท่านั้น'); }
+/** ตรวจสิทธิ์แอดมินจากเซิร์ฟเวอร์ก่อนเปลี่ยนสูตรหรือโครงสร้างชีต */
+function requireAdmin_() { if (!isAdmin_()) throw new Error('เฉพาะผู้ดูแลระบบเท่านั้น'); }
 
 /** ลบรายการรับ-จ่าย: รายการที่มาจากใบเบิก (คืนสต๊อกทั้งใบ) ผู้ดูแลเท่านั้นที่ลบได้ คนอื่นให้ส่งคำขอด้วย requestDelete */
 function deleteMovement(id) {
@@ -287,11 +289,21 @@ function deleteMovementCore_(id) {
     const cur = mv.find(x => x.id === id);
     if (!cur) throw new Error('ไม่พบรายการ ' + id);
     const sh = sh_(SH.mv);
-    const clear = row => [[1, 3], [5, 1], [7, 1], [9, 8]].forEach(p => sh.getRange(row, p[0], 1, p[1]).clearContent());
+    // เก็บแถวเดิมเป็น audit trail แทน clearContent(): สูตร SUMIFS และ readMv_
+    // นับเฉพาะ "รับเข้า" / "จ่ายออก" จึงไม่กระทบยอดเมื่อเปลี่ยนเป็น "ยกเลิก-..."
+    const cancel = x => {
+      const cell = sh.getRange(x.row, 2);
+      const oldType = String(cell.getValue());
+      if (oldType !== 'รับเข้า' && oldType !== 'จ่ายออก') throw new Error('สถานะรายการเปลี่ยนแล้ว กรุณารีเฟรช');
+      const note = 'ยกเลิก ' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss') + ' โดย ' + me_();
+      // เขียนหมายเหตุในเซลล์เดิมก่อนเปลี่ยนประเภทรายการ เพื่อให้ตรวจย้อนหลังได้
+      cell.setNote((note + '\n' + (cell.getNote() || '')).slice(0, 2000));
+      cell.setValue('ยกเลิก-' + oldType);
+    };
     if (cur.doc) {
-      // รายการจากใบเบิก: ยกเลิกการจ่ายทั้งใบ คืนสต๊อกทุกรายการ แล้วใบเบิกกลับเป็น "อนุมัติ"
+      // ต้องยกเลิกทั้งใบเพื่อป้องกันยอดเบิกไม่ตรงกับเอกสาร
       const rows = mv.filter(x => x.doc === cur.doc);
-      rows.forEach(x => clear(x.row));
+      rows.forEach(cancel);
       const r = readReqs_().find(x => x.no === cur.doc);
       if (r && r.status === 'จ่ายแล้ว') {
         const rs = sh_(SH.rq);
@@ -300,8 +312,9 @@ function deleteMovementCore_(id) {
       }
       return {ok: true, reverted: cur.doc, count: rows.length};
     }
+    // ยกเลิกการรับเข้าอาจทำให้คงเหลือติดลบ จึงต้องตรวจเช่นเดิม
     assertNoNegative_(items, mv.filter(x => x.id !== id), [cur.code]);
-    clear(cur.row);
+    cancel(cur);
     return {ok: true};
   }
 }
@@ -557,7 +570,7 @@ function saveReqCore_(r) {
       const c = String(l.code || ''), q = Number(l.qty);
       if (!c) return;
       if (!items.some(i => i[0] === c)) throw new Error('ไม่พบรหัสสินค้า ' + c);
-      if (!(q > 0)) throw new Error('จำนวนของ ' + c + ' ต้องมากกว่า 0');
+      if (!Number.isFinite(q) || q <= 0) throw new Error('จำนวนของ ' + c + ' ต้องเป็นตัวเลขที่มากกว่า 0');
       merged[c] = merged[c] ? {code: c, qty: merged[c].qty + q, note: merged[c].note} : {code: c, qty: q, note: l.note || ''};
     });
     const lines = Object.keys(merged).map(k => merged[k]);
@@ -679,6 +692,7 @@ function deleteReqs(ids) {
  * 4) ใบเบิกที่สถานะ จ่ายแล้ว แต่ยังไม่มีรายการจ่ายออก จะถูกสร้างรายการให้ (ยอดคงเหลือเท่าเดิม)
  */
 function fixFormulas() {
+  requireAdmin_(); // ป้องกันการเรียกผ่าน google.script.run โดยผู้ใช้ที่ไม่มีสิทธิ์
   const log = [];
   withLock_(() => {
     const inv = sh_(SH.inv), mvSh = sh_(SH.mv);
@@ -790,12 +804,13 @@ function saveQuote(q) {
       const code = String(l.code || ''), qty = Number(l.qty), price = Number(l.price);
       if (!code) return;
       if (!items.some(i => i[0] === code)) throw new Error('ไม่พบรหัสสินค้า ' + code);
-      if (!(qty > 0)) throw new Error('จำนวนของ ' + code + ' ต้องมากกว่า 0');
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error('จำนวนของ ' + code + ' ต้องเป็นตัวเลขที่มากกว่า 0');
       if (l.price === '' || l.price == null || !(isFinite(price) && price >= 0)) throw new Error('ราคาของ ' + code + ' ต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป');
       lines.push({code: code, qty: qty, price: Math.round(price * 100) / 100});
     });
     if (!lines.length) throw new Error('ใบเสนอราคาต้องมีสินค้าอย่างน้อย 1 รายการ');
     const sub = lines.reduce((s, l) => s + l.qty * l.price, 0);
+    if (!Number.isFinite(sub)) throw new Error('ยอดสินค้าสูงเกินขอบเขตตัวเลขที่รองรับ');
     if (discount > sub + 1e-9) throw new Error('ส่วนลดมากกว่ายอดรวม');
 
     const qs = qsh_(QSH.qt, QT_HEAD), ls = qsh_(QSH.ql, QL_HEAD);
@@ -861,6 +876,7 @@ function deleteQuote(id) {
 
 /** ตรวจการตั้งค่า ผลดูที่ บันทึกการดำเนินการ */
 function checkSetup() {
+  requireAdmin_(); // รายละเอียดโครงสร้างระบบสำหรับผู้ดูแลเท่านั้น
   const ss = ss_(), out = [];
   Object.keys(SH).forEach(k => out.push((ss.getSheetByName(SH[k]) ? 'OK       ' : 'ไม่พบชีต ') + SH[k]));
   const a7 = sh_(SH.inv).getRange('A7').getValue();
