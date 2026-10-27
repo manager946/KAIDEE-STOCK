@@ -1035,7 +1035,63 @@ let rsz;window.addEventListener("resize",()=>{clearTimeout(rsz);rsz=setTimeout((
 document.addEventListener("pointerover",e=>{const h=e.target.closest&&e.target.closest("[data-hit]");if(h)showTip(+h.dataset.hit)});
 document.addEventListener("pointerout",e=>{if(e.target.closest&&e.target.closest("#sch")&&!(e.relatedTarget&&e.relatedTarget.closest&&e.relatedTarget.closest("#sch")))hideTip()});
 const TL={"สต๊อก":"LED&amp;Power","ตัวอย่าง":"ตัวอย่างสินค้า","ใบเบิก":"ใบเบิกสินค้า","รับ-จ่าย":"สินค้าเข้า-ออก"};
-const T={"ภาพรวม":overview,"สต๊อก":stock,"ตัวอย่าง":showcase,"รับ-จ่าย":moves,"ใบเบิก":reqs,"ใบเสนอราคา":qtab,"ยอดขาย":monthly};
+const T={"ภาพรวม":overview,"สต๊อก":stock,"ตัวอย่าง":showcase,"รับ-จ่าย":moves,"ใบเบิก":reqs,"ใบเสนอราคา":qtab,"ออร์เดอร์/ใบขาย":stagingSaleView,"ยอดขาย":monthly};
+
+/* ----- STAGING SALES ONLY: no production stock operations ----- */
+function stagingSaleView(){
+ const S=st.salesRows||[],disabled=st.salesBusy?' disabled':'';
+ const goods=D.items.map(x=>'<option value="'+esc(x[0])+'">'+esc(x[0])+' — '+esc(x[2])+'</option>').join('');
+ return '<div class="banner">โหมดทดสอบเท่านั้น — ออร์เดอร์และใบขายจะใช้ไฟล์ KAIDEE-STOCK STAGING ไม่ใช่ฐานข้อมูลจริง</div>'+
+ '<div class="card"><h2>สร้างออร์เดอร์ทดสอบ</h2><div class="form">'+
+ '<label>ลูกค้า (ทดสอบ)<input id="sCustomer" value="ลูกค้าทดสอบ" maxlength="120"></label>'+
+ '<label>สินค้า<select id="sCode">'+goods+'</select></label>'+
+ '<label>จำนวน<input id="sQty" type="number" min="1" step="1" value="1"></label>'+
+ '<label>ราคาขายต่อหน่วย<input id="sPrice" type="number" min="0" step=".01" value="0"></label>'+
+ '<button id="sCreate" class="btn"'+disabled+'>บันทึกออร์เดอร์</button></div></div>'+
+ '<div class="card"><h2>รายการออร์เดอร์ / ใบขายใน Staging</h2>'+
+ '<button class="gh" id="sRefresh"'+disabled+'>รีเฟรช</button> <span class="sub">'+esc(st.salesMsg||'')+'</span>'+
+ '<div class="tw"><table><thead><tr><th>เลขออร์เดอร์</th><th>ลูกค้า</th><th>ประเภท</th><th>สถานะส่ง</th><th>ยอดสุทธิ</th><th>ดำเนินการ</th></tr></thead><tbody>'+
+ S.map(x=>'<tr><td>'+esc(x.no)+'</td><td>'+esc(x.customer)+'</td><td>'+esc(x.docType)+'</td><td>'+esc(x.delivery)+'</td><td class="n">'+f(x.total)+'</td>'+
+ '<td><button class="gh sm" data-sconvert="'+esc(x.id)+'"'+disabled+'>ออกใบขาย</button> '+
+ '<button class="gh sm" data-sship="'+esc(x.id)+'"'+disabled+'>ส่งมอบ/ตัดสต๊อก</button> '+
+ '<button class="gh sm danger" data-sreverse="'+esc(x.id)+'"'+disabled+'>คืนสินค้า</button></td></tr>').join('')+
+ '</tbody></table></div></div>';
+}
+async function stagingSalesRefresh(){
+ try {st.salesRows=await gs('stagingListOrders')();st.salesMsg='โหลดข้อมูลสำเร็จ';}
+ catch(e){st.salesMsg='เปิดรายการ Staging ไม่ได้: '+(e.message||e);}
+ draw();
+}
+function stagingMutationId(){
+ if(!st.salesMutation)st.salesMutation='QA-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
+ return st.salesMutation;
+}
+async function stagingSalesAction(kind,id) {
+ if(st.salesBusy)return;
+ let fn,args,success;
+ if(kind==='create'){
+  const code=$('#sCode')?.value,customer=$('#sCustomer')?.value,qty=Number($('#sQty')?.value),price=Number($('#sPrice')?.value);
+  if(!code || !String(customer||'').trim() || !Number.isInteger(qty) || qty<=0 || !Number.isFinite(price) || price<0){
+   st.salesMsg='กรุณาระบุลูกค้า สินค้า จำนวน และราคาให้ถูกต้อง';draw();return;
+  }
+  fn='stagingCreateOrder';args=[{clientMutationId:stagingMutationId(),customer,lines:[{code,qty,price}]}];
+ } else if(kind==='convert') {fn='stagingConvertOrder';args=[id];}
+ else if(kind==='ship') {fn='stagingShipOrder';args=[id];}
+ else if(kind==='reverse') {
+  const reason=window.prompt('เหตุผลการคืนสินค้า (ข้อมูลทดสอบ)');
+  if(!String(reason||'').trim())return;
+  fn='stagingReverseOrder';args=[id,reason];
+ } else return;
+ st.salesBusy=true;st.salesMsg='กำลังทำรายการใน STAGING...';draw();
+ try {
+  const result=await gs(fn)(...args);
+  if(kind==='create')st.salesMutation='';
+  st.salesMsg=(result.reused?'พบคำสั่งเดิม — ไม่บันทึกซ้ำ':'สำเร็จ')+' · '+(result.saleNo||result.no||id||'');
+  st.salesRows=await gs('stagingListOrders')();
+ } catch(e){st.salesMsg='ไม่สำเร็จ: '+(e.message||e);}
+ finally {st.salesBusy=false;draw();}
+}
+
 const TP={"ตัวอย่าง":showcase,"สั่งสินค้า":orderTab},TPL={"ตัวอย่าง":"สินค้า"};
 const ROLEL={admin:"แอดมิน",staff:"หลังบ้าน",public:"หน้าบ้าน"};
 function draw(){
@@ -1049,7 +1105,12 @@ function draw(){
 const blankLine=()=>({code:D.items[0]?D.items[0][0]:"",qty:1});
 document.addEventListener("click",e=>{
  const el=s=>e.target.closest(s);
- const t=el("[data-t]");if(t){st.tab=t.dataset.t;st.dr=null;st.drMsg="";st.spe=null;st.spTop="";st.okMsg="";st.topMsg="";st.qtopMsg="";st.co=null;st.op=null;st.focus=0;st.cf="";return draw()}
+ if(e.target.id==="sRefresh"){stagingSalesRefresh();return}
+ if(e.target.id==="sCreate"){stagingSalesAction('create');return}
+ const sc=el("[data-sconvert]");if(sc){stagingSalesAction('convert',sc.dataset.sconvert);return}
+ const ss=el("[data-sship]");if(ss){stagingSalesAction('ship',ss.dataset.sship);return}
+ const sr=el("[data-sreverse]");if(sr){stagingSalesAction('reverse',sr.dataset.sreverse);return}
+ const t=el("[data-t]");if(t){if(t.dataset.t==="ออร์เดอร์/ใบขาย")stagingSalesRefresh();st.tab=t.dataset.t;st.dr=null;st.drMsg="";st.spe=null;st.spTop="";st.okMsg="";st.topMsg="";st.qtopMsg="";st.co=null;st.op=null;st.focus=0;st.cf="";return draw()}
  const k=el("th[data-k]");if(k){st.dir=st.sort===k.dataset.k?-st.dir:1;st.sort=k.dataset.k;st.focus=0;return draw()}
  if(e.target.id==="rf")return load();
  if(e.target.id==="sortgrp"){st.sort="grp";st.dir=1;return draw()}
