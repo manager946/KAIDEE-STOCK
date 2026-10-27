@@ -170,13 +170,29 @@ function stagingCreateOrder(p) {
       const h=stagingOrder_(ss,id);
       if (h && (String(h.values[1])!==no || String(h.values[3])!==customer))
         throw new Error('พบออร์เดอร์ที่รหัสตรงกันแต่รายละเอียดไม่ตรงกัน');
+      // The previous failed write may have persisted A:G before Sheets rejected H.
+      // Replay MUST complete the same row, never create a new one or mark DONE early.
+      const expectedRow=[
+        id,no,date,customer,payload.contact,payload.address,'','ใบออร์เดอร์','',
+        'ร่าง','รอจัดส่ง','ยังไม่ชำระ',discount,shipping,subtotal,total,0,total,
+        me_(),'','',payload.note,''
+      ];
       if (!h) {
         const row=stagingFreeRow_(sh,2);
-        sh.getRange(row,1,1,KDS.orderCols).setValues([[
-          id,no,date,customer,payload.contact,payload.address,'','ออร์เดอร์','',
-          'ร่าง','ยังไม่ส่ง','ยังไม่ชำระ',discount,shipping,subtotal,total,0,total,
-          me_(),'','',payload.note,''
-        ]]);
+        sh.getRange(row,1,1,KDS.orderCols).setValues([expectedRow]);
+      } else {
+        const strictCols=[0,1,3,7,9,10,11,12,13,14,15,16,17,21];
+        strictCols.forEach(i=>{
+          const v=h.values[i];
+          if(v!=='' && v!=null && String(v)!==String(expectedRow[i]))
+            throw new Error('ข้อมูลออร์เดอร์เดิมไม่ตรงกับคำขอที่คอลัมน์ '+(i+1)+'; ห้ามบันทึกซ้ำ');
+        });
+        const restored=expectedRow.map((value,i)=>{
+          const current=h.values[i];
+          return current===''||current==null?value:current;
+        });
+        // All 23 columns now use actual validated dropdown values.
+        sh.getRange(h.row,1,1,KDS.orderCols).setValues([restored]);
       }
       const ls=stagingSheet_(ss,KDS.line);
       clean.forEach((l,i)=>{
@@ -223,7 +239,7 @@ function stagingConvertOrder(id) {
     if(!lines.length) throw new Error('ยังไม่มีรายการขาย');
     const saleNo=String(v[8]||('SO-'+String(id)));
     const sh=stagingSheet_(ss,KDS.order);
-    sh.getRange(h.row,8,1,3).setValues([['ใบขายสินค้า',saleNo,'ยืนยันแล้ว']]);
+    sh.getRange(h.row,8,1,3).setValues([['ใบขายสินค้า',saleNo,'ยืนยัน']]);
     return {ok:true,id,saleNo};
   });
 }
@@ -258,7 +274,7 @@ function stagingShipCore_(ss,id,kind,reason) {
     throw new Error('ต้องแปลงออร์เดอร์เป็นใบขายก่อน');
   const isReversal=kind==='REVERSE';
   if (!isReversal && String(order[9])==='ยกเลิก') throw new Error('ใบขายถูกยกเลิก');
-  if (isReversal && String(order[10])==='คืนสินค้า') {
+  if (isReversal && String(order[9])==='ยกเลิก') {
     const done=stagingFind_(stagingJournal_(ss),2,KDS.journalCols,0,'REVERSE:'+id);
     if (done && done.values[3]==='DONE') return {ok:true,id,saleNo,reused:true};
   }
@@ -316,8 +332,10 @@ function stagingShipCore_(ss,id,kind,reason) {
     });
     const ord=stagingSheet_(ss,KDS.order);
     if(isReversal) {
+      // Column K has strict validation: only รอจัดส่ง / ส่งมอบแล้ว.
+      // Keep historical delivery status; journal records the reversal reason.
       ord.getRange(h.row,10).setValue('ยกเลิก');
-      ord.getRange(h.row,11).setValue('คืนสินค้า');
+      ord.getRange(h.row,11).setNote('คืนสินค้าแล้ว (STAGING); ดู OperationJournal และ MovementID SALE-REV- เพื่อยืนยัน');
     } else {
       ord.getRange(h.row,11).setValue('ส่งมอบแล้ว');
       ord.getRange(h.row,20,1,2).setValues([[me_(),new Date()]]);
