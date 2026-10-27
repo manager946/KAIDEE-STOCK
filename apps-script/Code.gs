@@ -21,7 +21,7 @@ const COMPANY = {
   phone: ''
 };
 const VAT_RATE = 0.07;
-const PDF_FOLDER = 'ใบเบิกสินค้า PDF';         // โฟลเดอร์ใน Google Drive ที่เก็บไฟล์ PDF
+const PDF_FOLDER = 'KAIDEE-STOCK STAGING PDF'; // Dedicated test folder; never mix with real PDFs         // โฟลเดอร์ใน Google Drive ที่เก็บไฟล์ PDF
 const PDF_SHARE_ANYONE = false; // Private by default. Never auto-share internal sales documents.                 // true = ทุกคนที่มีลิงก์เปิดดูได้ (ส่งทาง LINE ได้), false = เฉพาะคนที่มีสิทธิ์
 const APPROVERS = [];  // อีเมลผู้มีสิทธิ์อนุมัติใบเบิก เช่น ['manager@metangprint.org'] — เว้นว่าง = ทุกคนอนุมัติได้
 
@@ -76,7 +76,7 @@ function parseDate_(s) {
   return new Date(+m[1], +m[2] - 1, +m[3]);
 }
 const me_ = () => Session.getActiveUser().getEmail() || 'web';
-const ss_ = () => SpreadsheetApp.getActive();
+const ss_ = () => stagingDb_(); // STAGING BUILD ONLY: all legacy functions use the verified copy
 const sh_ = name => {
   const s = ss_().getSheetByName(name);
   if (!s) throw new Error('ไม่พบชีต ' + name);
