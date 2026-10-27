@@ -35,7 +35,7 @@ test('quotations reject Infinity before sheet mutation',()=>{
 });
 test('deleted stock movement keeps audit type and original content',()=>{
  const x=setup('staff@metangprint.org'),types={4:'รับเข้า'},notes={};
- x.SpreadsheetApp.getActive=()=>({getSheetByName:()=>({getRange:r=>({getValue:()=>types[r],setValue:v=>types[r]=v,getNote:()=>notes[r]||'',setNote:v=>notes[r]=v})})});
+ x.stagingDb_=()=>({getSheetByName:()=>({getRange:r=>({getValue:()=>types[r],setValue:v=>types[r]=v,getNote:()=>notes[r]||'',setNote:v=>notes[r]=v})})});
  x.readItems_=()=>[['K2','LED','','pcs',10,100,0]];
  x.readMv_=()=>types[4]==='รับเข้า'?[{id:'M1',row:4,doc:'',type:'รับเข้า',code:'K2',qty:2}]:[];
  assert.equal(x.deleteMovementCore_('M1').ok,true);
