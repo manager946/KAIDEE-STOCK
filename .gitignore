@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+.clasp.json
+credentials.json
+*secret*.json
+*token*.json
+node_modules/
+coverage/
+backups/
+exports/
+data/
+*.csv
+*.xlsx
+*.db
+*.sqlite
