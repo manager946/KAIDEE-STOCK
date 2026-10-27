@@ -184,7 +184,7 @@ function stagingCreateOrder(p) {
         const existing=stagingFind_(ls,2,KDS.lineCols,0,lineId);
         if (existing) {
           const v=existing.values;
-          if (String(v[1])!==id || String(v[2])!==l.code || Number(v[5])!==l.qty)
+          if (String(v[1])!==id || String(v[2])!==l.code || Number(v[5])!==l.qty || Number(v[6])!==l.price || Number(v[7])!==Math.round(l.qty*l.price*100)/100)
             throw new Error('รายการขายเดิมไม่ตรงกับออร์เดอร์');
         } else {
           const row=stagingFreeRow_(ls,2);
@@ -235,7 +235,7 @@ function stagingEnsureMovement_(ss,m,kind) {
   if (old.length>1) throw new Error('MovementID ซ้ำ: '+m.id);
   if (old.length) {
     const v=old[0];
-    if (v.code!==m.code || v.qty!==m.qty ||
+    if (v.code!==m.code || v.qty!==m.qty || v.doc!==m.doc ||
         ![kind==='SALE'?'เตรียมจ่าย':'เตรียมรับคืน',kind==='SALE'?'จ่ายออก':'รับเข้า'].includes(v.type))
       throw new Error('MovementID เดิมไม่ตรงข้อมูลที่ต้องบันทึก: '+m.id);
     return v.row;
@@ -258,6 +258,10 @@ function stagingShipCore_(ss,id,kind,reason) {
     throw new Error('ต้องแปลงออร์เดอร์เป็นใบขายก่อน');
   const isReversal=kind==='REVERSE';
   if (!isReversal && String(order[9])==='ยกเลิก') throw new Error('ใบขายถูกยกเลิก');
+  if (isReversal && String(order[10])==='คืนสินค้า') {
+    const done=stagingFind_(stagingJournal_(ss),2,KDS.journalCols,0,'REVERSE:'+id);
+    if (done && done.values[3]==='DONE') return {ok:true,id,saleNo,reused:true};
+  }
   const lines=stagingLines_(ss,id);
   if(!lines.length) throw new Error('ไม่มีรายการขาย');
   const inv=stagingInventory_(ss);
@@ -273,6 +277,7 @@ function stagingShipCore_(ss,id,kind,reason) {
   movements.forEach(m=>{if(m.id)existingById[m.id]=(existingById[m.id]||[]).concat(m)});
   // Reject legacy posting under the same document: no guesswork/double issue.
   const validIds=new Set(plans.map(x=>x.id));
+  if (new Set(plans.map(x=>x.id)).size !== plans.length) throw new Error('SaleLineID ซ้ำในออร์เดอร์');
   if(!isReversal && movements.some(m=>m.doc===saleNo && m.type==='จ่ายออก' && !validIds.has(m.id)))
     throw new Error('พบรายการจ่ายเดิมในเลขใบขายเดียวกัน ต้องตรวจด้วยคนก่อน');
   if (isReversal) {
@@ -295,7 +300,9 @@ function stagingShipCore_(ss,id,kind,reason) {
       throw new Error('สต๊อกไม่พอ: '+code+' ขาด '+(required[code]-bal[code]));
   });
   const key=(isReversal?'REVERSE:':'SHIP:')+id;
-  const op=stagingOp_(ss,key,kind,id,{saleNo,lines:plans,reason:String(reason||'').slice(0,250)});
+  const previous=stagingFind_(stagingJournal_(ss),2,KDS.journalCols,0,key);
+  const previousPayload=previous?JSON.parse(String(previous.values[4]||'{}')):null;
+  const op=stagingOp_(ss,key,kind,id,{saleNo,lines:plans,reason:previousPayload?String(previousPayload.reason||''):String(reason||'').slice(0,250)});
   if(op.done) return {ok:true,id,saleNo,reused:true};
   try {
     // Phase 1: prepare all movements; no stock change in formulas yet.
