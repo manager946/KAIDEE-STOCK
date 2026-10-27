@@ -22,7 +22,7 @@ const COMPANY = {
 };
 const VAT_RATE = 0.07;
 const PDF_FOLDER = 'ใบเบิกสินค้า PDF';         // โฟลเดอร์ใน Google Drive ที่เก็บไฟล์ PDF
-const PDF_SHARE_ANYONE = true;                 // true = ทุกคนที่มีลิงก์เปิดดูได้ (ส่งทาง LINE ได้), false = เฉพาะคนที่มีสิทธิ์
+const PDF_SHARE_ANYONE = false; // Private by default. Never auto-share internal sales documents.                 // true = ทุกคนที่มีลิงก์เปิดดูได้ (ส่งทาง LINE ได้), false = เฉพาะคนที่มีสิทธิ์
 const APPROVERS = [];  // อีเมลผู้มีสิทธิ์อนุมัติใบเบิก เช่น ['manager@metangprint.org'] — เว้นว่าง = ทุกคนอนุมัติได้
 
 /**
@@ -906,14 +906,15 @@ function savePdf(no, vatMode, b64, docType) {
   }
   const docNo = no;
   const bytes = Utilities.base64Decode(String(b64 || ''));
-  if (bytes.length < 100) throw new Error('ไฟล์ PDF ไม่ถูกต้อง');
+  if (bytes.length < 100 || bytes.length > 8 * 1024 * 1024 || String.fromCharCode.apply(null, bytes.slice(0, 5)) !== '%PDF-') throw new Error('ไฟล์ PDF ไม่ถูกต้องหรือขนาดใหญ่เกิน 8MB');
   const suffix = {none: 'ไม่รวมVAT', add: 'บวกVAT', incl: 'รวมVAT'}[vatMode] || '';
   const name = docType === 'stock' ? 'สรุปสต๊อก_' + docNo + '.pdf' : (docType === 'quote' ? 'ใบเสนอราคา_' : '') + docNo + (suffix ? '_' + suffix : '') + '.pdf';
   const it = DriveApp.getFoldersByName(PDF_FOLDER);
   const folder = it.hasNext() ? it.next() : DriveApp.createFolder(PDF_FOLDER);
-  const old = folder.getFilesByName(name);
-  while (old.hasNext()) old.next().setTrashed(true);
+  // Create first; do not trash existing documents before the replacement is safely stored.
+  // Preserve older PDFs as document history to support recovery and auditing.
   const file = folder.createFile(Utilities.newBlob(bytes, 'application/pdf', name));
+  file.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.VIEW);
   let shared = false;
   if (PDF_SHARE_ANYONE) {
     try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); shared = true; } catch (e) {}
