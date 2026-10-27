@@ -16,3 +16,8 @@ test('reversal avoids invalid คืนสินค้า document delivery stat
  assert.doesNotMatch(code,/getRange\(h\.row,11\)\.setValue\('คืนสินค้า'\)/);
  assert.match(code,/getRange\(h\.row,11\)\.setNote/);
 });
+
+test('pending movement type is blank to satisfy strict native dropdown',()=>{
+ assert.match(code,/const f=mvFormulas_\(row\),type='';/);
+ assert.match(code,/!\['',kind==='SALE'/);
+});
