@@ -159,7 +159,7 @@ function stagingCreateOrder(p) {
     const orderId='KS-'+mutation;
     const id=orderId.slice(0,90);
     const today=Utilities.formatDate(new Date(),Session.getScriptTimeZone(),'yyyy-MM-dd');
-    const no='OR-'+today.replace(/-/g,'')+'-'+mutation.slice(0,8);
+    const no='OR-'+mutation; // deterministic across midnight / retries
     const date=new Date(today+'T12:00:00');
     const payload={id,no,customer,discount,shipping,subtotal,total,
       contact:String(p.contact||'').slice(0,80),address:String(p.address||'').slice(0,300),
