@@ -165,7 +165,14 @@ function stagingCreateOrder(p) {
       contact:String(p.contact||'').slice(0,80),address:String(p.address||'').slice(0,300),
       note:String(p.note||'').slice(0,300),lines:clean};
     const op=stagingOp_(ss,key,'CREATE',id,payload);
-    if (op.done) return {ok:true,orderId:id,no,reused:true};
+    if (op.done) {
+      const hDone=stagingOrder_(ss,id), lsDone=stagingLines_(ss,id);
+      if (hDone && String(hDone.values[7])==='ใบออร์เดอร์' &&
+          String(hDone.values[9])==='ร่าง' && String(hDone.values[10])==='รอจัดส่ง' &&
+          String(hDone.values[11])==='ยังไม่ชำระ' &&
+          Number(hDone.values[14])===subtotal && Number(hDone.values[15])===total &&
+          lsDone.length===clean.length) return {ok:true,orderId:id,no,reused:true};
+    }
     try {
       const h=stagingOrder_(ss,id);
       if (h && (String(h.values[1])!==no || String(h.values[3])!==customer))
@@ -210,8 +217,15 @@ function stagingCreateOrder(p) {
           ]]);
         }
       });
+      const verified=stagingOrder_(ss,id), verifiedLines=stagingLines_(ss,id);
+      if(!verified || verified.values[7]!=='ใบออร์เดอร์' ||
+         verified.values[9]!=='ร่าง' || verified.values[10]!=='รอจัดส่ง' ||
+         verified.values[11]!=='ยังไม่ชำระ' ||
+         Number(verified.values[14])!==subtotal || Number(verified.values[15])!==total ||
+         verifiedLines.length!==clean.length)
+        throw new Error('ออร์เดอร์บันทึกไม่ครบ; ห้ามกำหนด DONE');
       stagingOpStatus_(op,'DONE','');
-      return {ok:true,orderId:id,no,reused:false};
+      return {ok:true,orderId:id,no,reused:op.done};
     } catch(e) {
       stagingOpStatus_(op,'ERROR',e.message);
       throw e;
