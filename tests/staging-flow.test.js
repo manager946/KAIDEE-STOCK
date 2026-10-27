@@ -11,6 +11,7 @@ function fixture(){
    getRange:(r,c,n=1,m=1)=>({
     getValues:()=>Array.from({length:n},(_,i)=>Array.from({length:m},(_,j)=>rows[r+i-1]?.[c+j-1]??'')),
     getValue:()=>rows[r-1]?.[c-1]??'',
+    setNote:()=>{},getNote:()=>'',
     setValues:a=>a.forEach((v,i)=>v.forEach((x,j)=>{(rows[r+i-1]??=[])[c+j-1]=x})),
     setValue:v=>{if(fail&&name==='บันทึกรับ-จ่าย'&&c===2&&r===5&&v==='จ่ายออก'){fail=false;throw Error('QA injected failure');}(rows[r-1]??=[])[c-1]=v;}
    })}; sheets[name]=sh;return sh;
