@@ -270,7 +270,10 @@ function stagingEnsureMovement_(ss,m,kind) {
       throw new Error('MovementID เดิมไม่ตรงข้อมูลที่ต้องบันทึก: '+m.id);
     return v.row;
   }
-  const row=stagingFreeRow_(sh,4);
+  // Stock ledger is append-only. Empty column A does NOT make a row free:
+  // old STAGING rows can contain notes, formulas, or partial failed writes.
+  const row=Math.max(4,sh.getLastRow()+1);
+  if (row>sh.getMaxRows()) sh.insertRowAfter(sh.getMaxRows());
   // Movement type dropdown only permits รับเข้า / จ่ายออก. A blank B cell is
   // the resumable, inert PREPARED phase, identified by its stable MovementID.
   // Posting changes B once to an allowed value after all lines are prepared.
@@ -278,14 +281,17 @@ function stagingEnsureMovement_(ss,m,kind) {
   const who=me_(),now=new Date();
   // Google Sheets rejects even an empty-string write to a strict dropdown
   // in column B. Never include B in the PREPARED-phase write range.
-  // Write the stable MovementID first so a failure can be safely diagnosed.
-  sh.getRange(row,11).setValue(m.id);
+  // Prepare metadata before assigning the deterministic MovementID.
+  // If a write fails, an incomplete row remains inert and a subsequent
+  // retry appends a fresh row rather than overwriting any existing data.
   sh.getRange(row,1).setValue(now);
   sh.getRange(row,3,1,8).setValues([[
     m.code,f[0],m.qty,f[1],m.price,f[2],
     who,(kind==='SALE'?'ส่งมอบ':'รับคืน')+' ตามใบขาย '+m.doc
   ]]);
   sh.getRange(row,12,1,5).setValues([[now,who,m.doc,'','']]);
+  // Assign MovementID last: retries can now discover the complete row.
+  sh.getRange(row,11).setValue(m.id);
   return row;
 }
 function stagingShipCore_(ss,id,kind,reason) {
