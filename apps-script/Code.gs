@@ -6,7 +6,7 @@
  * หลักการนับสต๊อก: ทุกการเคลื่อนไหวอยู่ในชีต บันทึกรับ-จ่าย ที่เดียว
  *   คงเหลือ = ยอดยกมา + รับเข้า − จ่ายออก
  *   เมื่อกด "จ่ายสินค้า" ตามใบเบิก ระบบจะเขียนรายการ จ่ายออก ลงชีตนี้ (DocumentNo = เลขใบเบิก)
- *   ครั้งแรกให้รัน fixFormulas() หนึ่งครั้ง เพื่อแก้สูตรเดิมที่นับใบเบิกซ้ำและจำกัดช่วงแถว
+ * STAGING SAFETY: do not run fixFormulas(); it is disabled to preserve reconciliation formulas.
  */
 const SH = {inv: 'คลังสินค้า', mv: 'บันทึกรับ-จ่าย', rq: 'ใบเบิกสินค้า', ln: 'รายการใบเบิก', sum: 'สรุปยอดขายรายเดือน'};
 const INV_FIRST = 8;   // แถวแรกของสินค้าในชีตคลังสินค้า
@@ -21,7 +21,7 @@ const COMPANY = {
   phone: ''
 };
 const VAT_RATE = 0.07;
-const PDF_FOLDER = 'ใบเบิกสินค้า PDF';         // โฟลเดอร์ใน Google Drive ที่เก็บไฟล์ PDF
+const PDF_FOLDER = 'KAIDEE-STOCK STAGING PDF'; // Dedicated test folder; never mix with real PDFs         // โฟลเดอร์ใน Google Drive ที่เก็บไฟล์ PDF
 const PDF_SHARE_ANYONE = false; // Private by default. Never auto-share internal sales documents.                 // true = ทุกคนที่มีลิงก์เปิดดูได้ (ส่งทาง LINE ได้), false = เฉพาะคนที่มีสิทธิ์
 const APPROVERS = [];  // อีเมลผู้มีสิทธิ์อนุมัติใบเบิก เช่น ['manager@metangprint.org'] — เว้นว่าง = ทุกคนอนุมัติได้
 
@@ -29,16 +29,21 @@ const APPROVERS = [];  // อีเมลผู้มีสิทธิ์อน
  * ผู้ดูแลที่ยืนยันการลบรายการจ่ายตามใบเบิก (คืนสต๊อกทั้งใบ) เช่น ['manager@metangprint.org']
  * เว้นว่าง = เจ้าของสคริปต์ (บัญชีที่กด ทำให้ใช้งานได้) เป็นผู้ดูแล
  */
-const ADMINS = [];
+// STAGING ONLY: explicit Admin allowlist; no dynamic effective-user fallback.
+// In execute-as-user runs, getEffectiveUser() may be the invoking Staff user.
+const ADMINS = ['manager@metangprint.org'];
 /**
  * หน้าบ้าน / หลังบ้าน
- *  - แอดมิน   = ADMINS (หรือเจ้าของสคริปต์)
+ *  - แอดมิน   = ADMINS ที่กำหนดรายชื่อชัดเจน (ไม่อนุมานจากผู้เรียกใช้)
  *  - ผู้ดูแล/พนักงานหลังบ้าน = ทุกอีเมลในโดเมน STAFF_DOMAIN และอีเมลใน STAFF
  *  - หน้าบ้าน (บุคคลภายนอก) = คนอื่นทั้งหมด เห็นเฉพาะแคตตาล็อกสินค้า และส่งคำสั่งเบิกสินค้าได้อย่างเดียว
  * ระบบรู้อีเมลได้เฉพาะคนในโดเมนเดียวกับเจ้าของสคริปต์ คนนอกโดเมนจะเป็นหน้าบ้านเสมอ
  */
 const STAFF_DOMAIN = 'metangprint.org';
 const STAFF = [];
+// STAGING ONLY: extra exact Gmail addresses are held in Script Properties,
+// not committed to GitHub. Never trust an email supplied by the browser.
+const STAGING_STAFF_EMAILS_PROPERTY = 'KAIDEE_STAGING_STAFF_EMAILS';
 const PUBLIC_SHOW_PRICE = true;            // หน้าบ้านเห็นราคาต่อหน่วยในแคตตาล็อก
 const PUBLIC_ORDER_LIMIT_PER_HOUR = 30;    // จำกัดจำนวนคำสั่งจากหน้าบ้านต่อชั่วโมง กันสแปม
 const PUBLIC_TAG = '[หน้าบ้าน]';
@@ -76,7 +81,7 @@ function parseDate_(s) {
   return new Date(+m[1], +m[2] - 1, +m[3]);
 }
 const me_ = () => Session.getActiveUser().getEmail() || 'web';
-const ss_ = () => SpreadsheetApp.getActive();
+const ss_ = () => stagingDb_(); // STAGING BUILD ONLY: all legacy functions use the verified copy
 const sh_ = name => {
   const s = ss_().getSheetByName(name);
   if (!s) throw new Error('ไม่พบชีต ' + name);
@@ -133,10 +138,61 @@ function balances_(items, mv) {
   mv.forEach(m => { if (m.code in b) b[m.code] += m.type === 'รับเข้า' ? m.qty : -m.qty; });
   return b;
 }
-function needFix_() {
-  const h = sh_(SH.inv).getRange(INV_FIRST, 8).getFormula();
-  const d = sh_(SH.mv).getRange(MV_FIRST, 4).getFormula();
-  return /รายการใบเบิก/.test(h) || /\$D\$59/.test(d);
+/**
+ * Read-only, fail-closed stock formula gate. Checks every nonblank SKU row.
+ *
+ * The current STAGING H-column hybrid formula includes BOTH:
+ *   - outgoing movements, including REQ-* and SALE-* postings; and
+ *   - a paid-requisition fallback without a matching REQ-* anti-duplicate term.
+ * Its SALE-* fallback has anti-double-counting, but paid requisitions do not.
+ * Therefore the hybrid formula must NOT authorize a new requisition issue.
+ *
+ * A pure, canonical movement-ledger formula is the only formula shape this
+ * guard can classify as safe for NEW requisition issues. This is NOT a full
+ * historical migration/reconciliation certificate. Never auto-repair a sheet.
+ */
+function stockFormulaAudit_() {
+  const inv = sh_(SH.inv);
+  const count = Math.max(inv.getLastRow() - INV_FIRST + 1, 0);
+  const issues = [];
+  let checkedSkuCount = 0;
+  if (!count) issues.push({row: INV_FIRST, reason: 'NO_INVENTORY_ROWS'});
+  else {
+    const skuCells = inv.getRange(INV_FIRST, 1, count, 1).getDisplayValues();
+    const hFormulas = inv.getRange(INV_FIRST, 8, count, 1).getFormulas();
+    for (let i = 0; i < count; i++) {
+      if (!String(skuCells[i][0] || '').trim()) continue;
+      checkedSkuCount++;
+      const row = INV_FIRST + i;
+      const actual = String(hFormulas[i][0] || '').replace(/\s+/g, '').toUpperCase();
+      const canonical = ("=SUMIFS('บันทึกรับ-จ่าย'!$E:$E,'บันทึกรับ-จ่าย'!$C:$C,A" +
+        row + ",'บันทึกรับ-จ่าย'!$B:$B,\"จ่ายออก\")").replace(/\s+/g, '').toUpperCase();
+      if (actual !== canonical) {
+        const reason = actual.includes('รายการใบเบิก')
+          ? 'REQUISITION_FALLBACK_DOUBLE_COUNT_RISK'
+          : 'NONCANONICAL_OR_MISSING_ISSUED_FORMULA';
+        if (issues.length < 12) issues.push({row, reason});
+      }
+    }
+    if (!checkedSkuCount) issues.push({row: INV_FIRST, reason: 'NO_SKUS'});
+  }
+  const d = String(sh_(SH.mv).getRange(MV_FIRST, 4).getFormula() || '');
+  if (/\$D\$59\b/i.test(d)) issues.push({row: MV_FIRST, reason: 'LEGACY_BOUNDED_MOVEMENT_FORMULA'});
+  return {
+    status: issues.length ? 'REVIEW_REQUIRED' : 'MOVEMENT_ONLY_FORMULA_VERIFIED',
+    safeForNewRequisitionIssue: issues.length === 0,
+    checkedSkuCount, issues,
+    note: 'READ ONLY: checks formula shape, not historical ledger reconciliation. Never run fixFormulas.'
+  };
+}
+// Keep legacy UI flag fail-closed; it now means manual review required, not auto-repair.
+function needFix_() { return !stockFormulaAudit_().safeForNewRequisitionIssue; }
+/** Admin-only, no document mutation; log only the summary, not the formulas or SKUs. */
+function qaStockFormulaAuditReadOnly() {
+  requireAdmin_();
+  const result = stockFormulaAudit_();
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
 }
 
 /** ข้อมูลทั้งหมดสำหรับหน้าเว็บ */
@@ -256,19 +312,52 @@ function updateMovement(id, m) {
 
 /** ลบรายการรับ-จ่าย (ล้างข้อมูลในแถว แต่เก็บสูตรคอลัมน์ D, F, H ไว้) */
 function admins_() {
-  if (ADMINS.length) return ADMINS.map(x => String(x).trim().toLowerCase());
-  let o = '';
-  try { o = Session.getEffectiveUser().getEmail(); } catch (e) {}
-  return o ? [o.toLowerCase()] : [];
+  // Fail closed: only explicitly configured, nonempty Admin addresses.
+  return ADMINS.map(x => String(x).trim().toLowerCase()).filter(Boolean);
 }
 function isAdmin_() { return admins_().indexOf(String(me_()).toLowerCase()) !== -1; }
+function stagingStaffGmailEmails_() {
+  const prop = PropertiesService.getScriptProperties()
+    .getProperty(STAGING_STAFF_EMAILS_PROPERTY);
+  const entries = String(prop || '').split(',');
+  // Exact email allowlist only; no wildcard/domain granting for Gmail.
+  return entries.map(x => x.trim().toLowerCase())
+    .filter(x => /^[a-z0-9._%+-]+@gmail\.com$/.test(x));
+}
 function role_() {
   if (isAdmin_()) return 'admin';
-  const m = String(me_()).toLowerCase();
+  const m = String(me_()).trim().toLowerCase();
+  // Apps Script may hide an external user's email in execute-as-owner mode.
+  // A missing identity MUST NOT gain Staff/Admin access.
   if (!m || m === 'web') return 'public';
   if (STAFF.map(x => String(x).trim().toLowerCase()).indexOf(m) !== -1) return 'staff';
+  if (stagingStaffGmailEmails_().indexOf(m) !== -1) return 'staff';
   if (STAFF_DOMAIN && m.slice(-(STAFF_DOMAIN.length + 1)) === '@' + STAFF_DOMAIN.toLowerCase()) return 'staff';
   return 'public';
+}
+
+// Admin-only, read-only config check. Does not disclose any email address.
+function qaStagingStaffGmailConfigReadOnly() {
+  requireAdmin_();
+  const ss = stagingDb_();
+  if (ss.getId() !== '149kQunDS0c5xxXbcOcNQNsjLWPUINnlSebkG5o-1qys') {
+    throw new Error('STAGING spreadsheet guard failed');
+  }
+  const raw = String(PropertiesService.getScriptProperties()
+    .getProperty(STAGING_STAFF_EMAILS_PROPERTY) || '').trim();
+  const configured = stagingStaffGmailEmails_();
+  const valid = raw !== '' && raw.split(',').length === 1 &&
+    configured.length === 1;
+  const result = {
+    test: 'STAGING_STAFF_GMAIL_ALLOWLIST_CONFIG_READ_ONLY',
+    status: valid ? 'READY_FOR_IDENTITY_TEST' : 'BLOCKED',
+    staffGmailCount: configured.length,
+    currentRole: role_(),
+    identityVerifiedWithRealStaff: false,
+    note: 'READ ONLY. No emails printed, no PDF created, no sharing changed.'
+  };
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
 }
 function requireStaff_() { if (role_() === 'public') throw new Error('ส่วนนี้สำหรับพนักงานหลังบ้านเท่านั้น'); }
 /** ตรวจสิทธิ์แอดมินจากเซิร์ฟเวอร์ก่อนเปลี่ยนสูตรหรือโครงสร้างชีต */
@@ -627,7 +716,7 @@ function setReqStatus(id, action) {
     }
     if (action === 'issue') {
       if (r.status !== 'อนุมัติ') throw new Error('ต้องอนุมัติก่อนจ่ายสินค้า');
-      if (needFix_()) throw new Error('ต้องรัน fixFormulas ใน Apps Script ก่อน ไม่อย่างนั้นยอดจ่ายออกจะถูกนับซ้ำ');
+      if (needFix_()) throw new Error('STAGING: สูตรจ่ายออกยังไม่ผ่านการตรวจความปลอดภัย ห้ามจ่ายใบเบิกและห้ามรัน fixFormulas; ให้ Admin ตรวจสูตรและประวัติรายการก่อน');
       const items = readItems_(), mv = readMv_();
       if (mv.some(m => m.doc === r.no)) throw new Error('ใบเบิกนี้จ่ายสินค้าไปแล้ว');
       const out = r.lines.map(l => ({type: 'จ่ายออก', code: l.code, qty: l.qty}));
@@ -683,57 +772,15 @@ function deleteReqs(ids) {
   });
 }
 
-/* ---------- แก้สูตรในชีต (รันครั้งเดียว) ---------- */
+/* ---------- STAGING: destructive legacy formula repair permanently disabled ---------- */
 /**
- * เลือกฟังก์ชันนี้แล้วกด เรียกใช้ หนึ่งครั้ง (แนะนำให้ทำสำเนาชีตก่อน)
- * 1) คอลัมน์ จ่ายออก ในคลังสินค้า: นับจากบันทึกรับ-จ่ายอย่างเดียว (เดิมนับใบเบิกที่จ่ายแล้วเพิ่มอีกรอบ ทำให้ซ้ำเมื่อจ่ายผ่านระบบ)
- * 2) ขยายช่วงสูตรที่เคยจำกัดไว้ที่แถว 59/60/100 ให้ครอบคลุมทั้งคอลัมน์
- * 3) เติมสูตรคอลัมน์ D, F, H ของบันทึกรับ-จ่ายให้ครบทุกแถว
- * 4) ใบเบิกที่สถานะ จ่ายแล้ว แต่ยังไม่มีรายการจ่ายออก จะถูกสร้างรายการให้ (ยอดคงเหลือเท่าเดิม)
+ * Do not use the original fixFormulas on this STAGING copy: it overwrites
+ * the reconciled H-column formula and can double-count/lose legacy movements.
+ * Historical reconciliation needs a separate reviewed migration and QA.
  */
 function fixFormulas() {
-  requireAdmin_(); // ป้องกันการเรียกผ่าน google.script.run โดยผู้ใช้ที่ไม่มีสิทธิ์
-  const log = [];
-  withLock_(() => {
-    const inv = sh_(SH.inv), mvSh = sh_(SH.mv);
-    const nInv = readItems_().length;
-    const hf = [];
-    for (let r = INV_FIRST; r < INV_FIRST + nInv; r++) {
-      hf.push(["=SUMIFS('บันทึกรับ-จ่าย'!$E:$E, 'บันทึกรับ-จ่าย'!$C:$C, A" + r + ", 'บันทึกรับ-จ่าย'!$B:$B, \"จ่ายออก\")"]);
-    }
-    inv.getRange(INV_FIRST, 8, nInv, 1).setFormulas(hf);
-    log.push('แก้สูตรจ่ายออก ' + nInv + ' แถว');
-
-    const widen = f => f
-      .replace(/\$A\$8:\$([A-Z])\$59\b/g, (m, c) => '$A$8:$' + c)
-      .replace(/\b([A-Z])8:([A-Z])59\b/g, (m, a, b) => a + '8:' + b)
-      .replace(/(\$[A-Z]\$4:\$[A-Z])60\b/g, (m, a) => a)
-      .replace(/(\$[A-Z]\$2:\$[A-Z])100\b/g, (m, a) => a);
-    let w = 0;
-    [SH.inv, SH.sum].forEach(n => {
-      const s = ss_().getSheetByName(n);
-      if (!s) return;
-      const rg = s.getRange(1, 1, s.getLastRow(), s.getLastColumn()), fs = rg.getFormulas();
-      fs.forEach((row, i) => row.forEach((f, j) => {
-        if (f && widen(f) !== f) { s.getRange(i + 1, j + 1).setFormula(widen(f)); w++; }
-      }));
-    });
-    log.push('ขยายช่วงสูตร ' + w + ' เซลล์');
-
-    const max = mvSh.getMaxRows(), cols = [[], [], []];
-    for (let r = MV_FIRST; r <= max; r++) mvFormulas_(r).forEach((f, i) => cols[i].push([f]));
-    [4, 6, 8].forEach((c, i) => mvSh.getRange(MV_FIRST, c, max - MV_FIRST + 1, 1).setFormulas(cols[i]));
-    log.push('เติมสูตรบันทึกรับ-จ่าย แถว ' + MV_FIRST + '-' + max);
-
-    const mv = readMv_();
-    let mig = 0;
-    readReqs_().filter(r => r.status === 'จ่ายแล้ว' && !mv.some(m => m.doc === r.no)).forEach(r => {
-      writeIssue_(r, r.payer || 'ย้ายข้อมูลเดิม'); mig++;
-    });
-    log.push('สร้างรายการจ่ายออกจากใบเบิกที่จ่ายแล้ว ' + mig + ' ใบ');
-  });
-  Logger.log(log.join('\n'));
-  return log;
+  requireAdmin_();
+  throw new Error('STAGING: fixFormulas ถูกปิดเพื่อป้องกันการเขียนทับสูตรสต๊อก กรุณาใช้ qaStockFormulaAuditReadOnly เพื่อตรวจสอบเท่านั้น');
 }
 
 /* ---------- ใบเสนอราคา (แยกจากใบเบิก ไม่กระทบสต๊อก) ---------- */
@@ -884,7 +931,7 @@ function checkSetup() {
   const a3 = sh_(SH.mv).getRange('A3').getValue();
   out.push((a3 === 'วันที่' ? 'OK       ' : 'ผิดตำแหน่ง ') + 'หัวตารางบันทึกรับ-จ่ายอยู่ที่ A3 (พบ: ' + a3 + ')');
   out.push((ss.getSheetByName(QSH.qt) ? 'OK       ' : 'ยังไม่มี   ') + 'ชีตใบเสนอราคา (ระบบสร้างให้เองเมื่อบันทึกใบเสนอราคาใบแรก)');
-  out.push(needFix_() ? 'ต้องแก้   สูตรเดิมยังนับใบเบิกซ้ำ/จำกัดแถว → รัน fixFormulas หนึ่งครั้ง' : 'OK       สูตรนับสต๊อกถูกต้อง');
+  out.push(needFix_() ? 'ต้องตรวจ   สูตรสต๊อกยังไม่ปลอดภัยสำหรับการจ่ายใบเบิก; ห้ามรัน fixFormulas' : 'OK       รูปแบบสูตรจ่ายออกตรวจผ่าน (ยังต้องตรวจประวัติต่างหาก)');
   const d = getData();
   out.push('อ่านได้: สินค้า ' + d.items.length + ' | รับ-จ่าย ' + d.mv.length + ' | ใบเบิก ' + d.rq.length);
   Logger.log(out.join('\n'));

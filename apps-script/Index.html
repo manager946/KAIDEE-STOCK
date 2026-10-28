@@ -414,7 +414,7 @@ function rows(){return D.items.map(([code,cat,desc,unit,pr,op,min])=>{
  const s=isPub()?((D.avail||{})[code]||""):bal<=0?"สินค้าหมด":bal<=min?"ต้องสั่งซื้อ":pd&&after<=min?"รอเบิก":"ปกติ";
  return{code,cat,desc,unit,pr,op,min,i,o,bal,pd,after,s,val:bal*pr}})}
 const tag=s=>`<span class="t ${s==="ปกติ"||s==="จ่ายแล้ว"||s==="ยืนยันแล้ว"?"ok":s==="รอเบิก"||s==="รออนุมัติ"||s==="ร่าง"||s==="รอลูกค้ายืนยัน"?"pe":s==="อนุมัติ"?"mu":"lo"}">${esc(s)}</span>`;
-const fixBanner=()=>D.needFix?`<div class="banner">สูตรในชีตยังนับใบเบิกที่จ่ายแล้วซ้ำ และจำกัดจำนวนแถวไว้ ให้เปิด Apps Script แล้วรัน <b>fixFormulas</b> หนึ่งครั้ง (ระหว่างนี้ปุ่มจ่ายสินค้าตามใบเบิกจะยังใช้ไม่ได้)</div>`:"";
+const fixBanner=()=>D.needFix?`<div class="banner">STAGING: สูตรจ่ายออกยังไม่ผ่านการตรวจความปลอดภัยสำหรับการจ่ายใบเบิก จึงปิดคำสั่งจ่ายสินค้าไว้เพื่อป้องกันการนับซ้ำ กรุณาให้ Admin ตรวจด้วย qaStockFormulaAuditReadOnly — ห้ามเรียก fixFormulas</div>`:"";
 function act(p,ok,key){st.busy=true;setMsg(key,"กำลังบันทึก...");draw();
  return p.then(()=>{st.busy=false;st.cf="";setMsg(key,ok);return load()}).catch(e=>{st.busy=false;st.cf="";setMsg(key,`<span class="err">${esc(e.message||e)}</span>`);draw()})}
 function setMsg(k,v){if(k==="mv")st.msg=v;else if(k==="ed")st.edMsg=v;else st.rqm[k]=v}
