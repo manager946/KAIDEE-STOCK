@@ -44,3 +44,7 @@ Review reproduced an existing defect: opening 100, shipment 2 leaves 98; changin
 - Updated full `npm test`: PASS 74/74, zero failures/skips. Each mismatch test also verifies all mock sheet rows remain unchanged.
 - Normal shipment/reversal, retries and partial shipment recovery continue to pass.
 - GitHub review/CI status remains unverified while api.github.com is blocked. Local tests are not CI evidence.
+
+## Requisition crash recovery follow-up
+
+See [REQUISITION_RECOVERY_QA_20261028.md](REQUISITION_RECOVERY_QA_20261028.md) for the new durable intent / inert prepare / resumable commit protocol, 72 injected crash scenarios and final 84/84 local results. This supersedes the earlier REQ non-resumability limitation for newly journaled operations; unidentified legacy partial postings remain blocked. No Google formulas or deployments were changed.

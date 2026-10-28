@@ -81,7 +81,7 @@ function issueContext(formula, movements=[]) {
  c.readReqs_=()=>[{id:'QA',no:'RQ-QA',row:2,status:'อนุมัติ',lines:[{code:'SKU',qty:2}]}];
  c.readItems_=()=>[['SKU','','','',1,10]];
  c.readMv_=()=>movements;
- c.writeIssue_=()=>{throw Error('UNEXPECTED_POST');};
+ c.reqIssueRows_=()=>movements.map(m=>({v:[null,m.type||'จ่ายออก',m.code,null,m.qty,null,0,null,'qa@example.invalid',null,m.id,null,null,m.doc]}));
  return c;
 }
 test('real requisition issue blocks unknown and hybrid formulas before any posting',()=>{

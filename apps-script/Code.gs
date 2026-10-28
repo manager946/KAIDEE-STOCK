@@ -676,6 +676,7 @@ function saveReqCore_(r) {
       cur = reqs.find(x => x.id === r.id);
       if (!cur) throw new Error('ไม่พบใบเบิก');
       if (EDITABLE.indexOf(cur.status) === -1) throw new Error('ใบเบิกสถานะ "' + cur.status + '" แก้ไขไม่ได้');
+      if (PropertiesService.getScriptProperties().getProperty(reqIssueKey_(cur.id))) throw new Error('Requisition issue started; editing blocked');
       row = cur.row;
       cur.lines.forEach(l => { ls.getRange(l.row, 1, 1, 5).clearContent(); ls.getRange(l.row, 7).clearContent(); });   // ล้างรายการเดิม (ไม่แตะสูตรคอลัมน์ F)
     } else {
@@ -715,42 +716,110 @@ function setReqStatus(id, action) {
       return {ok: true};
     }
     if (action === 'cancel') {
+      if (PropertiesService.getScriptProperties().getProperty(reqIssueKey_(r.id))) throw new Error('Requisition issue started; cancellation blocked');
       if (EDITABLE.indexOf(r.status) === -1) throw new Error('ใบเบิกสถานะ "' + r.status + '" ยกเลิกไม่ได้');
       rs.getRange(r.row, 7).setValue('ยกเลิก');
       return {ok: true};
     }
     if (action === 'issue') {
-      if (r.status !== 'อนุมัติ') throw new Error('ต้องอนุมัติก่อนจ่ายสินค้า');
+      if (!['อนุมัติ', 'จ่ายแล้ว'].includes(r.status)) throw new Error('ต้องอนุมัติก่อนจ่ายสินค้า');
       if (needFix_()) throw new Error('STAGING: สูตรจ่ายออกยังไม่ผ่านการตรวจความปลอดภัย ห้ามจ่ายใบเบิกและห้ามรัน fixFormulas; ให้ Admin ตรวจสูตรและประวัติรายการก่อน');
-      const items = readItems_(), mv = readMv_();
-      // A missing/edited DocumentNo must not bypass deterministic MovementID protection.
-      const issueIds = new Set(r.lines.map((l, i) => 'REQ-' + r.id + '-' + (i + 1)));
-      if (mv.some(m => m.doc === r.no || issueIds.has(m.id)))
-        throw new Error('ใบเบิกนี้จ่ายสินค้าไปแล้ว');
-      const out = r.lines.map(l => ({type: 'จ่ายออก', code: l.code, qty: l.qty}));
-      const b = balances_(items, mv.concat(out));
-      const short = r.lines.filter(l => b[l.code] < 0).map(l => l.code + ' ขาด ' + (-b[l.code]));
-      if (short.length) throw new Error('สินค้าไม่พอจ่าย: ' + short.join(', '));
-      writeIssue_(r, who);
-      rs.getRange(r.row, 7).setValue('จ่ายแล้ว');
-      rs.getRange(r.row, 9, 1, 2).setValues([[who, new Date()]]);
-      return {ok: true};
+      const result = writeIssue_(r, who);
+      if (r.status !== 'จ่ายแล้ว') {
+        // Status is last. Retrying a failed header write validates the same ledger.
+        rs.getRange(r.row, 9, 1, 2).setValues([[result.who, new Date(result.at)]]);
+        rs.getRange(r.row, 7).setValue('จ่ายแล้ว');
+      }
+      return {ok: true, reused: result.reused};
     }
     throw new Error('คำสั่งไม่ถูกต้อง');
   });
 }
 
+function reqIssueKey_(id) { return 'REQ_ISSUE_V1_' + id; }
+function reqIssueRows_() {
+  const sh = sh_(SH.mv), n = Math.max(0, sh.getLastRow() - MV_FIRST + 1);
+  return n ? sh.getRange(MV_FIRST, 1, n, 14).getValues()
+    .map((v, i) => ({v, row: MV_FIRST + i})) : [];
+}
 function writeIssue_(r, who) {
-  const sh = sh_(SH.mv), now = new Date();
-  const price = {}; readItems_().forEach(i => { price[i[0]] = Math.round(i[4] * REQ_PRICE_RATE * 100) / 100; });
-  r.lines.forEach((l, i) => {
-    const row = emptyRow_(sh, MV_FIRST, [2, 3]);
-    ensureMvFormulas_(sh, row);
-    sh.getRange(row, 1, 1, 3).setValues([[now, 'จ่ายออก', l.code]]);
+  const sh = sh_(SH.mv), props = PropertiesService.getScriptProperties();
+  const key = reqIssueKey_(r.id), saved = props.getProperty(key);
+  const items = readItems_();
+  const shape = r.lines.map((l, i) => ({id: 'REQ-' + r.id + '-' + (i + 1),
+    line: String(l.id || ''), code: l.code, qty: l.qty}));
+  if (!shape.length || shape.some(l => !items.some(i => i[0] === l.code) ||
+      !Number.isFinite(l.qty) || l.qty <= 0)) throw new Error('Invalid requisition issue plan');
+  let plan;
+  if (saved) {
+    plan = JSON.parse(saved);
+    if (plan.version !== 1 || plan.doc !== r.no || JSON.stringify(plan.shape) !== JSON.stringify(shape))
+      throw new Error('Requisition recovery payload mismatch; manual review required');
+  } else {
+    // Never adopt legacy/ambiguous postings into a new recovery operation.
+    if (r.status === 'จ่ายแล้ว' || reqIssueRows_().some(({v}) =>
+        (v[13] === r.no && v[1]) || shape.some(l => l.id === v[10])))
+      throw new Error('ใบเบิกนี้จ่ายสินค้าไปแล้ว; manual review required');
+    plan = {version: 1, doc: r.no, shape, who, at: new Date().toISOString(),
+      prices: shape.map(l => Math.round(items.find(i => i[0] === l.code)[4] * REQ_PRICE_RATE * 100) / 100)};
+    const encoded = JSON.stringify(plan);
+    // Conservative UTF-16 bound stays below per-property byte quota even in Thai.
+    if (encoded.length > 2000) throw new Error('Recovery plan exceeds safe property size; blocked');
+    props.setProperty(key, encoded); // durable intent BEFORE any movement write
+  }
+  const inspect = () => {
+    const rows = reqIssueRows_(), ids = new Set(shape.map(l => l.id));
+    // Old crashes may have activated a row before ID/DocumentNo existed.
+    // Never guess whether such a stock effect belongs to this operation.
+    if (rows.some(({v}) => v[1] === 'จ่ายออก' && shape.some(l => l.code === v[2]) && (!v[10] || !v[13])))
+      throw new Error('Unidentified active stock movement; manual review required');
+    if (rows.some(({v}) => v[13] === r.no && v[1] && !ids.has(v[10])))
+      throw new Error('Ambiguous requisition document movement; manual review required');
+    return shape.map((l, i) => {
+      const matches = rows.filter(({v}) => v[10] === l.id);
+      if (matches.length > 1) throw new Error('Duplicate REQ MovementID; manual review required');
+      if (!matches.length) return null;
+      const m = matches[0], v = m.v;
+      if (!['', 'จ่ายออก'].includes(v[1]) || v[2] !== l.code || v[4] !== l.qty ||
+          v[6] !== plan.prices[i] || v[13] !== plan.doc || v[8] !== plan.who)
+        throw new Error('REQ movement payload mismatch; manual review required');
+      return m;
+    });
+  };
+  let found = inspect();
+  if (r.status === 'จ่ายแล้ว' && found.some(m => !m || m.v[1] !== 'จ่ายออก'))
+    throw new Error('Paid requisition has incomplete ledger; manual review required');
+  const pending = shape.filter((l, i) => !found[i] || found[i].v[1] !== 'จ่ายออก');
+  if (!pending.length) return {who: plan.who, at: plan.at, reused: true};
+  const b = balances_(items, readMv_().concat(pending.map(l => ({...l, type: 'จ่ายออก'}))));
+  if (shape.some(l => b[l.code] < 0)) throw new Error('สินค้าไม่พอจ่าย; recovery blocked');
+  const reused = found.every(m => m && m.v[1] === 'จ่ายออก');
+  // Prepare ALL lines with blank type B. Orphans without ID remain inert and are never reused.
+  shape.forEach((l, i) => {
+    if (found[i]) return;
+    const row = Math.max(MV_FIRST, sh.getLastRow() + 1);
+    if (row > sh.getMaxRows()) sh.insertRowAfter(sh.getMaxRows());
+    sh.getRange(row, 1).setValue(new Date(plan.at));
+    sh.getRange(row, 3).setValue(l.code);
     sh.getRange(row, 5).setValue(l.qty);
-    sh.getRange(row, 7).setValue(price[l.code] || 0);   // ราคาเบิก = ราคาสินค้า × REQ_PRICE_RATE
-    sh.getRange(row, 9, 1, 6).setValues([[who, 'จ่ายตามใบเบิก ' + r.no, 'REQ-' + r.id + '-' + (i + 1), now, who, r.no]]);
+    sh.getRange(row, 7).setValue(plan.prices[i]);
+    sh.getRange(row, 9).setValue(plan.who);
+    sh.getRange(row, 10).setValue('จ่ายตามใบเบิก ' + plan.doc);
+    sh.getRange(row, 12).setValue(new Date(plan.at));
+    sh.getRange(row, 13).setValue(plan.who);
+    sh.getRange(row, 14).setValue(plan.doc);
+    ensureMvFormulas_(sh, row);
+    SpreadsheetApp.flush();
+    sh.getRange(row, 11).setValue(l.id); // ID last; all identifying metadata already persisted
   });
+  SpreadsheetApp.flush();
+  found = inspect();
+  if (found.some(m => !m)) throw new Error('Incomplete REQ preparation; blocked');
+  // Commit is resumable per line. Already-active rows are never posted twice.
+  found.forEach(m => { if (m.v[1] === '') sh.getRange(m.row, 2).setValue('จ่ายออก'); });
+  SpreadsheetApp.flush();
+  if (inspect().some(m => !m || m.v[1] !== 'จ่ายออก')) throw new Error('Incomplete REQ commit');
+  return {who: plan.who, at: plan.at, reused};
 }
 
 /**
@@ -874,6 +943,7 @@ function saveQuote(q) {
       cur = quotes.find(x => x.id === q.id);
       if (!cur) throw new Error('ไม่พบใบเสนอราคา');
       if (quoteLocked_(cur, readReqs_())) throw new Error('ใบเสนอราคานี้ลูกค้ายืนยันแล้ว (' + cur.reqNo + ') แก้ไขไม่ได้');
+      if (PropertiesService.getScriptProperties().getProperty(reqIssueKey_(cur.id))) throw new Error('Requisition issue started; editing blocked');
       row = cur.row;
       cur.lines.forEach(l => ls.getRange(l.row, 1, 1, QL_HEAD.length).clearContent());
     } else {
