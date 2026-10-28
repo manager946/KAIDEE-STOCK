@@ -68,3 +68,18 @@ User screenshot is a **new** Apps Script web-app deployment configuration form, 
 **Risk:** New-form `Only myself` prevents Staff access. Owner account `nrinkjet@gmail.com` shown in screenshot differs from source explicit Admin `manager@metangprint.org`. Owner-only execution does not necessarily provide the external Staff caller identity. Execute-as-user may require Staff access to the private STAGING spreadsheet, which is currently owner-only. Must reconcile access strategy before any Staff transaction/permissions changes.
 
 No permission, Google Sheet, PDF, deployment, or Production changes were made during this inspection. Actual deployed access and version are **UNVERIFIED**.
+
+## Step 8.2 deployed /exec web app responds with a Sheet access permission exception — 2026-10-28
+
+User supplied screenshot of URL `script.google.com/a/macros/metangprint.org/s/AKfycbw_B3ODl5FwFFhyj2QSYD60uVZjD20EcxK3GtgtrvTEJvTRx3kdeJ5WfZnOZCGdUmK8/exec`. UI correctly renders "ขายดีมีตังค์" with menu tabs, but displays "โหลดข้อมูลไม่สำเร็จ" and `Exception: คุณไม่มีสิทธิ์เข้าถึงเอกสารที่ต้องการ`. This is **not a clean backend RBAC PASS** or a confirmed inventory failure. The screenshot does not identify the effective user, actual deployment version, Script Properties, or exact thrown stack frame.
+
+Probable code path: `apps-script/Code.gs` `getData()` / `publicData_()` -> readItems_ -> `ss_()` -> `stagingDb_()` -> `SpreadsheetApp.openById(id)` from `KAIDEE_STAGING_SPREADSHEET_ID`. An execution identity without access to the *private* STAGING copy can trigger this failure. Official Apps Script web app identity behavior: https://developers.google.com/apps-script/guides/web. Alternate possibilities: wrong configured ID, differing uploaded/deployed source or missing file grant, another resource access error; need actual Executions stack to confirm.
+
+Safe nonmutating diagnostics:
+1. In the exact Chrome account/profile that opened this /exec, attempt to open the existing private STAGING Sheet URL only to establish whether that account can read it. Do not request new shares automatically.
+2. In exact STAGING Apps Script project, **Deploy > Manage deployments** (not New deployment) and identify whether this deployment ID belongs to it; read Execute-as and Who-has-access settings without editing.
+3. In STAGING **Project Settings > Script Properties**, visually verify `KAIDEE_STAGING_SPREADSHEET_ID` matches the approved STAGING ID. Never enter Production ID; do not disclose other properties/credentials in screenshots.
+4. In **Executions** open the latest `getData` failure and capture only function, stack location and exception, redact personal data and tokens.
+5. Decide a least-privilege identity/data access architecture before any role tests. **Do not change sharing, do not deploy again, do not run fixFormulas(), do not test transactions, do not touch Production**.
+
+Status: **WEB_UI_LOAD PASS**, **BACKEND_SHEET_READ FAIL/BLOCKED (unattributed permission error)**, **STAGING deployed Admin/Staff authorization PENDING**.
