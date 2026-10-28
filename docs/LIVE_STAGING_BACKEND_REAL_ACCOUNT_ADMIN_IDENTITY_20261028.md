@@ -32,3 +32,11 @@ User-provided screenshot of the synthetic-only Backend Integration web app shows
 Next: Admin check exact deployed Web app URL and access/execution setting; Staff open canonical `https://script.google.com/macros/s/[DEPLOYMENT_ID]/exec?action=identity` in a fresh Chrome Guest/profile with exactly one signed-in Gmail and no Admin account; do not grant script edit. Verify if Google auto-rewrites to `/u/1/`; inspect project's Executions log for matching doGet invocation. If no execution, routing/auth or deployment issue should be investigated before any RBAC conclusion. No STAGING/Production change.
 
 References: Google Apps Script troubleshooting (multi-account not supported) https://developers.google.com/apps-script/guides/support/troubleshooting and official issue tracker https://issuetracker.google.com/issues/574076813 (Oct 2026; account-specific web-app 404 before authorization).
+
+## 2026-10-28 — Canonical /exec link responds, but role is still Admin
+
+Following correction of the URL to `https://script.google.com/macros/s/[deployment-id]/exec?action=identity`, user reports JSON:
+```json
+{"test":"KAIDEE_BACKEND_REAL_ACCOUNT_INTEGRATION","action":"identity","role":"admin","activeEmailVisible":true,"effectiveUserMatchesActive":true,"status":"IDENTITY_CONFIRMED","dataSource":"SYNTHETIC_MEMORY_ONLY","writesPerformed":false}
+```
+This confirms the **canonical route returns JSON**, resolving the prior generic Drive error, but is **NOT Staff identity acceptance**. Explicit Admin role means the server identified an Admin session under its current deployment; investigate multi-account browser sessions or Execute-as setting, and possible stale deployment if a fresh isolated Staff-only profile still returns Admin. Do not change role configuration or grant broader permissions as a workaround. Staff and Public real-account Backend integration remain pending. Do not run simulated ship/PDF action checks under the misidentified session.
