@@ -40,3 +40,25 @@ Following correction of the URL to `https://script.google.com/macros/s/[deployme
 {"test":"KAIDEE_BACKEND_REAL_ACCOUNT_INTEGRATION","action":"identity","role":"admin","activeEmailVisible":true,"effectiveUserMatchesActive":true,"status":"IDENTITY_CONFIRMED","dataSource":"SYNTHETIC_MEMORY_ONLY","writesPerformed":false}
 ```
 This confirms the **canonical route returns JSON**, resolving the prior generic Drive error, but is **NOT Staff identity acceptance**. Explicit Admin role means the server identified an Admin session under its current deployment; investigate multi-account browser sessions or Execute-as setting, and possible stale deployment if a fresh isolated Staff-only profile still returns Admin. Do not change role configuration or grant broader permissions as a workaround. Staff and Public real-account Backend integration remain pending. Do not run simulated ship/PDF action checks under the misidentified session.
+
+## 2026-10-28 — Real Staff Gmail session reached isolated Web App but identity was unavailable
+
+User-provided JSON from `?action=identity`:
+```json
+{
+  "test": "KAIDEE_BACKEND_REAL_ACCOUNT_INTEGRATION",
+  "action": "identity",
+  "role": "public",
+  "activeEmailVisible": false,
+  "effectiveUserMatchesActive": false,
+  "status": "IDENTITY_UNVERIFIED",
+  "dataSource": "SYNTHETIC_MEMORY_ONLY",
+  "writesPerformed": false
+}
+```
+
+**Interpretation:** the standalone synthetic-only Backend probe was reachable, but it could not read the Gmail identity, and its fail-closed role policy classified caller as Public. Do not treat this as a real-account public-role acceptance PASS or a successful Staff role test. Real Staff integration **BLOCKED**; no stock/PDF data changed.
+
+Possible deployment mismatch: Apps Script Session.getActiveUser().getEmail() can be blank when a Web App runs as owner (Execute as me), especially for users outside the developer's Workspace domain. Verify the exact tested deployment in Deploy > Manage deployments: Web app / execute as `User accessing the web app`, and access for signed-in Google users. If setting wrong, fix ONLY isolated test project's deployment by edit + new version; never alter original STAGING/Production. If setting correct, inspect OAuth userinfo.email scope, employee consent, deployment version, and script Executions for the invocation, without granting additional permissions. Do not change backend to trust email or role from URL/query parameters.
+
+Official references: https://developers.google.com/apps-script/reference/base/session ; https://developers.google.com/apps-script/guides/web .
