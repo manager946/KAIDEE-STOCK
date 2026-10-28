@@ -58,3 +58,13 @@ User has only Admin and Staff accounts. Public is covered by source simulation C
 3. Decide and document least-privilege strategy for Staff access (owner-only STAGING Sheet vs user-executed Apps Script), then perform read-only real-Staff backend check before controlled synthetic order/ship/reverse/PDF tests.
 4. Recheck PDF ACL and stock reconciliation post-test; do not run `fixFormulas()`.
 5. Keep PR #4 Draft and Production closed until all required tests pass.
+
+## Step 8.1 user screenshot — unsubmitted **New deployment** dialog (2026-10-28)
+
+User screenshot is a **new** Apps Script web-app deployment configuration form, not the current deployment inventory. Visible controls: version `เวอร์ชันใหม่`, execute as `ฉัน (nrinkjet@gmail.com)`, access `ฉันเท่านั้น`, and active blue Deploy button. This is **not evidence of any deployed URL or the current live STAGING deployment mode**.
+
+**Action:** Do not click Deploy. Click Cancel, verify the project title and Script ID are the dedicated KAIDEE-STOCK STAGING project, then go to **Deploy > Manage deployments** and inspect the actual *existing* deployment(s), without editing/deploying. If none exist, record `STAGING_DEPLOYMENT_NOT_YET_CREATED` and stop pending secure access decision.
+
+**Risk:** New-form `Only myself` prevents Staff access. Owner account `nrinkjet@gmail.com` shown in screenshot differs from source explicit Admin `manager@metangprint.org`. Owner-only execution does not necessarily provide the external Staff caller identity. Execute-as-user may require Staff access to the private STAGING spreadsheet, which is currently owner-only. Must reconcile access strategy before any Staff transaction/permissions changes.
+
+No permission, Google Sheet, PDF, deployment, or Production changes were made during this inspection. Actual deployed access and version are **UNVERIFIED**.
