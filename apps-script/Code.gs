@@ -6,7 +6,7 @@
  * หลักการนับสต๊อก: ทุกการเคลื่อนไหวอยู่ในชีต บันทึกรับ-จ่าย ที่เดียว
  *   คงเหลือ = ยอดยกมา + รับเข้า − จ่ายออก
  *   เมื่อกด "จ่ายสินค้า" ตามใบเบิก ระบบจะเขียนรายการ จ่ายออก ลงชีตนี้ (DocumentNo = เลขใบเบิก)
- *   ครั้งแรกให้รัน fixFormulas() หนึ่งครั้ง เพื่อแก้สูตรเดิมที่นับใบเบิกซ้ำและจำกัดช่วงแถว
+ * STAGING SAFETY: do not run fixFormulas(); it is disabled to preserve reconciliation formulas.
  */
 const SH = {inv: 'คลังสินค้า', mv: 'บันทึกรับ-จ่าย', rq: 'ใบเบิกสินค้า', ln: 'รายการใบเบิก', sum: 'สรุปยอดขายรายเดือน'};
 const INV_FIRST = 8;   // แถวแรกของสินค้าในชีตคลังสินค้า
@@ -138,10 +138,61 @@ function balances_(items, mv) {
   mv.forEach(m => { if (m.code in b) b[m.code] += m.type === 'รับเข้า' ? m.qty : -m.qty; });
   return b;
 }
-function needFix_() {
-  const h = sh_(SH.inv).getRange(INV_FIRST, 8).getFormula();
-  const d = sh_(SH.mv).getRange(MV_FIRST, 4).getFormula();
-  return /รายการใบเบิก/.test(h) || /\$D\$59/.test(d);
+/**
+ * Read-only, fail-closed stock formula gate. Checks every nonblank SKU row.
+ *
+ * The current STAGING H-column hybrid formula includes BOTH:
+ *   - outgoing movements, including REQ-* and SALE-* postings; and
+ *   - a paid-requisition fallback without a matching REQ-* anti-duplicate term.
+ * Its SALE-* fallback has anti-double-counting, but paid requisitions do not.
+ * Therefore the hybrid formula must NOT authorize a new requisition issue.
+ *
+ * A pure, canonical movement-ledger formula is the only formula shape this
+ * guard can classify as safe for NEW requisition issues. This is NOT a full
+ * historical migration/reconciliation certificate. Never auto-repair a sheet.
+ */
+function stockFormulaAudit_() {
+  const inv = sh_(SH.inv);
+  const count = Math.max(inv.getLastRow() - INV_FIRST + 1, 0);
+  const issues = [];
+  let checkedSkuCount = 0;
+  if (!count) issues.push({row: INV_FIRST, reason: 'NO_INVENTORY_ROWS'});
+  else {
+    const skuCells = inv.getRange(INV_FIRST, 1, count, 1).getDisplayValues();
+    const hFormulas = inv.getRange(INV_FIRST, 8, count, 1).getFormulas();
+    for (let i = 0; i < count; i++) {
+      if (!String(skuCells[i][0] || '').trim()) continue;
+      checkedSkuCount++;
+      const row = INV_FIRST + i;
+      const actual = String(hFormulas[i][0] || '').replace(/\s+/g, '').toUpperCase();
+      const canonical = ("=SUMIFS('บันทึกรับ-จ่าย'!$E:$E,'บันทึกรับ-จ่าย'!$C:$C,A" +
+        row + ",'บันทึกรับ-จ่าย'!$B:$B,\"จ่ายออก\")").replace(/\s+/g, '').toUpperCase();
+      if (actual !== canonical) {
+        const reason = actual.includes('รายการใบเบิก')
+          ? 'REQUISITION_FALLBACK_DOUBLE_COUNT_RISK'
+          : 'NONCANONICAL_OR_MISSING_ISSUED_FORMULA';
+        if (issues.length < 12) issues.push({row, reason});
+      }
+    }
+    if (!checkedSkuCount) issues.push({row: INV_FIRST, reason: 'NO_SKUS'});
+  }
+  const d = String(sh_(SH.mv).getRange(MV_FIRST, 4).getFormula() || '');
+  if (/\$D\$59\b/i.test(d)) issues.push({row: MV_FIRST, reason: 'LEGACY_BOUNDED_MOVEMENT_FORMULA'});
+  return {
+    status: issues.length ? 'REVIEW_REQUIRED' : 'MOVEMENT_ONLY_FORMULA_VERIFIED',
+    safeForNewRequisitionIssue: issues.length === 0,
+    checkedSkuCount, issues,
+    note: 'READ ONLY: checks formula shape, not historical ledger reconciliation. Never run fixFormulas.'
+  };
+}
+// Keep legacy UI flag fail-closed; it now means manual review required, not auto-repair.
+function needFix_() { return !stockFormulaAudit_().safeForNewRequisitionIssue; }
+/** Admin-only, no document mutation; log only the summary, not the formulas or SKUs. */
+function qaStockFormulaAuditReadOnly() {
+  requireAdmin_();
+  const result = stockFormulaAudit_();
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
 }
 
 /** ข้อมูลทั้งหมดสำหรับหน้าเว็บ */
@@ -665,7 +716,7 @@ function setReqStatus(id, action) {
     }
     if (action === 'issue') {
       if (r.status !== 'อนุมัติ') throw new Error('ต้องอนุมัติก่อนจ่ายสินค้า');
-      if (needFix_()) throw new Error('ต้องรัน fixFormulas ใน Apps Script ก่อน ไม่อย่างนั้นยอดจ่ายออกจะถูกนับซ้ำ');
+      if (needFix_()) throw new Error('STAGING: สูตรจ่ายออกยังไม่ผ่านการตรวจความปลอดภัย ห้ามจ่ายใบเบิกและห้ามรัน fixFormulas; ให้ Admin ตรวจสูตรและประวัติรายการก่อน');
       const items = readItems_(), mv = readMv_();
       if (mv.some(m => m.doc === r.no)) throw new Error('ใบเบิกนี้จ่ายสินค้าไปแล้ว');
       const out = r.lines.map(l => ({type: 'จ่ายออก', code: l.code, qty: l.qty}));
@@ -721,57 +772,15 @@ function deleteReqs(ids) {
   });
 }
 
-/* ---------- แก้สูตรในชีต (รันครั้งเดียว) ---------- */
+/* ---------- STAGING: destructive legacy formula repair permanently disabled ---------- */
 /**
- * เลือกฟังก์ชันนี้แล้วกด เรียกใช้ หนึ่งครั้ง (แนะนำให้ทำสำเนาชีตก่อน)
- * 1) คอลัมน์ จ่ายออก ในคลังสินค้า: นับจากบันทึกรับ-จ่ายอย่างเดียว (เดิมนับใบเบิกที่จ่ายแล้วเพิ่มอีกรอบ ทำให้ซ้ำเมื่อจ่ายผ่านระบบ)
- * 2) ขยายช่วงสูตรที่เคยจำกัดไว้ที่แถว 59/60/100 ให้ครอบคลุมทั้งคอลัมน์
- * 3) เติมสูตรคอลัมน์ D, F, H ของบันทึกรับ-จ่ายให้ครบทุกแถว
- * 4) ใบเบิกที่สถานะ จ่ายแล้ว แต่ยังไม่มีรายการจ่ายออก จะถูกสร้างรายการให้ (ยอดคงเหลือเท่าเดิม)
+ * Do not use the original fixFormulas on this STAGING copy: it overwrites
+ * the reconciled H-column formula and can double-count/lose legacy movements.
+ * Historical reconciliation needs a separate reviewed migration and QA.
  */
 function fixFormulas() {
-  requireAdmin_(); // ป้องกันการเรียกผ่าน google.script.run โดยผู้ใช้ที่ไม่มีสิทธิ์
-  const log = [];
-  withLock_(() => {
-    const inv = sh_(SH.inv), mvSh = sh_(SH.mv);
-    const nInv = readItems_().length;
-    const hf = [];
-    for (let r = INV_FIRST; r < INV_FIRST + nInv; r++) {
-      hf.push(["=SUMIFS('บันทึกรับ-จ่าย'!$E:$E, 'บันทึกรับ-จ่าย'!$C:$C, A" + r + ", 'บันทึกรับ-จ่าย'!$B:$B, \"จ่ายออก\")"]);
-    }
-    inv.getRange(INV_FIRST, 8, nInv, 1).setFormulas(hf);
-    log.push('แก้สูตรจ่ายออก ' + nInv + ' แถว');
-
-    const widen = f => f
-      .replace(/\$A\$8:\$([A-Z])\$59\b/g, (m, c) => '$A$8:$' + c)
-      .replace(/\b([A-Z])8:([A-Z])59\b/g, (m, a, b) => a + '8:' + b)
-      .replace(/(\$[A-Z]\$4:\$[A-Z])60\b/g, (m, a) => a)
-      .replace(/(\$[A-Z]\$2:\$[A-Z])100\b/g, (m, a) => a);
-    let w = 0;
-    [SH.inv, SH.sum].forEach(n => {
-      const s = ss_().getSheetByName(n);
-      if (!s) return;
-      const rg = s.getRange(1, 1, s.getLastRow(), s.getLastColumn()), fs = rg.getFormulas();
-      fs.forEach((row, i) => row.forEach((f, j) => {
-        if (f && widen(f) !== f) { s.getRange(i + 1, j + 1).setFormula(widen(f)); w++; }
-      }));
-    });
-    log.push('ขยายช่วงสูตร ' + w + ' เซลล์');
-
-    const max = mvSh.getMaxRows(), cols = [[], [], []];
-    for (let r = MV_FIRST; r <= max; r++) mvFormulas_(r).forEach((f, i) => cols[i].push([f]));
-    [4, 6, 8].forEach((c, i) => mvSh.getRange(MV_FIRST, c, max - MV_FIRST + 1, 1).setFormulas(cols[i]));
-    log.push('เติมสูตรบันทึกรับ-จ่าย แถว ' + MV_FIRST + '-' + max);
-
-    const mv = readMv_();
-    let mig = 0;
-    readReqs_().filter(r => r.status === 'จ่ายแล้ว' && !mv.some(m => m.doc === r.no)).forEach(r => {
-      writeIssue_(r, r.payer || 'ย้ายข้อมูลเดิม'); mig++;
-    });
-    log.push('สร้างรายการจ่ายออกจากใบเบิกที่จ่ายแล้ว ' + mig + ' ใบ');
-  });
-  Logger.log(log.join('\n'));
-  return log;
+  requireAdmin_();
+  throw new Error('STAGING: fixFormulas ถูกปิดเพื่อป้องกันการเขียนทับสูตรสต๊อก กรุณาใช้ qaStockFormulaAuditReadOnly เพื่อตรวจสอบเท่านั้น');
 }
 
 /* ---------- ใบเสนอราคา (แยกจากใบเบิก ไม่กระทบสต๊อก) ---------- */
@@ -922,7 +931,7 @@ function checkSetup() {
   const a3 = sh_(SH.mv).getRange('A3').getValue();
   out.push((a3 === 'วันที่' ? 'OK       ' : 'ผิดตำแหน่ง ') + 'หัวตารางบันทึกรับ-จ่ายอยู่ที่ A3 (พบ: ' + a3 + ')');
   out.push((ss.getSheetByName(QSH.qt) ? 'OK       ' : 'ยังไม่มี   ') + 'ชีตใบเสนอราคา (ระบบสร้างให้เองเมื่อบันทึกใบเสนอราคาใบแรก)');
-  out.push(needFix_() ? 'ต้องแก้   สูตรเดิมยังนับใบเบิกซ้ำ/จำกัดแถว → รัน fixFormulas หนึ่งครั้ง' : 'OK       สูตรนับสต๊อกถูกต้อง');
+  out.push(needFix_() ? 'ต้องตรวจ   สูตรสต๊อกยังไม่ปลอดภัยสำหรับการจ่ายใบเบิก; ห้ามรัน fixFormulas' : 'OK       รูปแบบสูตรจ่ายออกตรวจผ่าน (ยังต้องตรวจประวัติต่างหาก)');
   const d = getData();
   out.push('อ่านได้: สินค้า ' + d.items.length + ' | รับ-จ่าย ' + d.mv.length + ' | ใบเบิก ' + d.rq.length);
   Logger.log(out.join('\n'));
