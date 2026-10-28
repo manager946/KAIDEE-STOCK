@@ -26,3 +26,16 @@
 - Google Drive folder inheritance: https://support.google.com/drive/answer/7166529
 
 No Production changes. Draft PR #4 remains Draft. The document captures user-observed discrepancy but not proof of a data breach.
+
+## Update: isolated Staff Chrome profile — PDF access DENIED (2026-10-28)
+
+User uploaded a screenshot of Google Drive's Thai **"ต้องมีสิทธิ์เข้าถึง"** (You need access) request-access page for the same private STAGING QA PDF. The page indicates a logged-in external Gmail account. The Staff test was performed using the requested separate Chrome profile.
+
+Revised assessment:
+- **PASS** for the specific requirement *Staff Gmail cannot open the existing Admin-owned private PDF*. This is a browser-observed negative-access test, not a broader backend Staff authorization proof.
+- **PASS** for unauthenticated public unable to open this PDF (user-reported prior test).
+- **PASS** for Admin creation/private ACL/owner access as previously documented.
+- The earlier Staff OPENED report is superseded by this isolated-profile retest. A multi-Google-account context mix-up is plausible but not definitively proven.
+- Screenshot shows a request-access UI including an **Editor** option. The user was instructed **not to request Editor access or grant/share permissions**. Do not change any Drive ACL based on this test.
+- Real `savePdf()` authorization for Staff/Public at the STAGING backend is **still PENDING**. Google Drive access is separate from Apps Script endpoint authorization.
+- Do not merge Draft PR #4 or deploy Production; continue with non-mutating role-gate checks and architecture review.
