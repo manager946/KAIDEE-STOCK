@@ -29,6 +29,9 @@ function context(formulas,ids=['K2-3000K'],movement='') {
     throw Error('UNEXPECTED_RANGE '+name+' '+row+','+col);
    }
  });
+ // Code.gs has a lexical sh_ helper that delegates to stagingDb_().
+ // Stub that dependency to route reads into the deterministic mocked sheets.
+ obj.stagingDb_ = () => ({ getSheetByName: name => obj.sh_(name) });
  return obj;
 }
 test('known movement-only formulas for every SKU permit gate',()=>{
