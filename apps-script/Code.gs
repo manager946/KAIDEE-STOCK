@@ -29,10 +29,12 @@ const APPROVERS = [];  // อีเมลผู้มีสิทธิ์อน
  * ผู้ดูแลที่ยืนยันการลบรายการจ่ายตามใบเบิก (คืนสต๊อกทั้งใบ) เช่น ['manager@metangprint.org']
  * เว้นว่าง = เจ้าของสคริปต์ (บัญชีที่กด ทำให้ใช้งานได้) เป็นผู้ดูแล
  */
-const ADMINS = [];
+// STAGING ONLY: explicit Admin allowlist; no dynamic effective-user fallback.
+// In execute-as-user runs, getEffectiveUser() may be the invoking Staff user.
+const ADMINS = ['manager@metangprint.org'];
 /**
  * หน้าบ้าน / หลังบ้าน
- *  - แอดมิน   = ADMINS (หรือเจ้าของสคริปต์)
+ *  - แอดมิน   = ADMINS ที่กำหนดรายชื่อชัดเจน (ไม่อนุมานจากผู้เรียกใช้)
  *  - ผู้ดูแล/พนักงานหลังบ้าน = ทุกอีเมลในโดเมน STAFF_DOMAIN และอีเมลใน STAFF
  *  - หน้าบ้าน (บุคคลภายนอก) = คนอื่นทั้งหมด เห็นเฉพาะแคตตาล็อกสินค้า และส่งคำสั่งเบิกสินค้าได้อย่างเดียว
  * ระบบรู้อีเมลได้เฉพาะคนในโดเมนเดียวกับเจ้าของสคริปต์ คนนอกโดเมนจะเป็นหน้าบ้านเสมอ
@@ -256,10 +258,8 @@ function updateMovement(id, m) {
 
 /** ลบรายการรับ-จ่าย (ล้างข้อมูลในแถว แต่เก็บสูตรคอลัมน์ D, F, H ไว้) */
 function admins_() {
-  if (ADMINS.length) return ADMINS.map(x => String(x).trim().toLowerCase());
-  let o = '';
-  try { o = Session.getEffectiveUser().getEmail(); } catch (e) {}
-  return o ? [o.toLowerCase()] : [];
+  // Fail closed: only explicitly configured, nonempty Admin addresses.
+  return ADMINS.map(x => String(x).trim().toLowerCase()).filter(Boolean);
 }
 function isAdmin_() { return admins_().indexOf(String(me_()).toLowerCase()) !== -1; }
 function role_() {
