@@ -151,6 +151,11 @@ function balances_(items, mv) {
  * guard can classify as safe for NEW requisition issues. This is NOT a full
  * historical migration/reconciliation certificate. Never auto-repair a sheet.
  */
+// Normalize syntax only: whitespace/case inside quoted names or criteria changes semantics.
+function stockFormulaSyntax_(formula) {
+  return String(formula || '').replace(/("(?:[^"]|"")*"|'(?:[^']|'')*')|([^"']+)/g,
+    (match, quoted, syntax) => quoted || syntax.replace(/\s+/g, '').toUpperCase());
+}
 function stockFormulaAudit_() {
   const inv = sh_(SH.inv);
   const count = Math.max(inv.getLastRow() - INV_FIRST + 1, 0);
@@ -164,9 +169,9 @@ function stockFormulaAudit_() {
       if (!String(skuCells[i][0] || '').trim()) continue;
       checkedSkuCount++;
       const row = INV_FIRST + i;
-      const actual = String(hFormulas[i][0] || '').replace(/\s+/g, '').toUpperCase();
-      const canonical = ("=SUMIFS('บันทึกรับ-จ่าย'!$E:$E,'บันทึกรับ-จ่าย'!$C:$C,A" +
-        row + ",'บันทึกรับ-จ่าย'!$B:$B,\"จ่ายออก\")").replace(/\s+/g, '').toUpperCase();
+      const actual = stockFormulaSyntax_(hFormulas[i][0]);
+      const canonical = stockFormulaSyntax_("=SUMIFS('บันทึกรับ-จ่าย'!$E:$E,'บันทึกรับ-จ่าย'!$C:$C,A" +
+        row + ",'บันทึกรับ-จ่าย'!$B:$B,\"จ่ายออก\")");
       if (actual !== canonical) {
         const reason = actual.includes('รายการใบเบิก')
           ? 'REQUISITION_FALLBACK_DOUBLE_COUNT_RISK'
@@ -718,7 +723,10 @@ function setReqStatus(id, action) {
       if (r.status !== 'อนุมัติ') throw new Error('ต้องอนุมัติก่อนจ่ายสินค้า');
       if (needFix_()) throw new Error('STAGING: สูตรจ่ายออกยังไม่ผ่านการตรวจความปลอดภัย ห้ามจ่ายใบเบิกและห้ามรัน fixFormulas; ให้ Admin ตรวจสูตรและประวัติรายการก่อน');
       const items = readItems_(), mv = readMv_();
-      if (mv.some(m => m.doc === r.no)) throw new Error('ใบเบิกนี้จ่ายสินค้าไปแล้ว');
+      // A missing/edited DocumentNo must not bypass deterministic MovementID protection.
+      const issueIds = new Set(r.lines.map((l, i) => 'REQ-' + r.id + '-' + (i + 1)));
+      if (mv.some(m => m.doc === r.no || issueIds.has(m.id)))
+        throw new Error('ใบเบิกนี้จ่ายสินค้าไปแล้ว');
       const out = r.lines.map(l => ({type: 'จ่ายออก', code: l.code, qty: l.qty}));
       const b = balances_(items, mv.concat(out));
       const short = r.lines.filter(l => b[l.code] < 0).map(l => l.code + ' ขาด ' + (-b[l.code]));

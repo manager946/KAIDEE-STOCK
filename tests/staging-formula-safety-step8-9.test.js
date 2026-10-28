@@ -67,3 +67,51 @@ test('UI no longer encourages users to run destructive repair',()=>{
 test('real issue path still checks formula gate and remains blocked on risky formula',()=>{
  assert.match(src,/if \(needFix_\(\)\) throw new Error\('STAGING: สูตรจ่ายออกยังไม่ผ่าน/);
 });
+
+test('quoted whitespace changes stock semantics and must not pass normalization',()=>{
+ for(const f of [canonical(8).replace('จ่ายออก','จ่าย ออก'),
+   canonical(8).replaceAll('บันทึกรับ-จ่าย','บันทึก รับ-จ่าย')])
+   assert.equal(context([f]).stockFormulaAudit_().safeForNewRequisitionIssue,false);
+ assert.equal(context([canonical(8).replace('SUMIFS(', 'sumifs( ')]).needFix_(),false);
+});
+
+function issueContext(formula, movements=[]) {
+ const c=context([formula]);
+ c.requireStaff_=()=>{};c.withLock_=fn=>fn();c.me_=()=> 'qa@example.invalid';
+ c.readReqs_=()=>[{id:'QA',no:'RQ-QA',row:2,status:'อนุมัติ',lines:[{code:'SKU',qty:2}]}];
+ c.readItems_=()=>[['SKU','','','',1,10]];
+ c.readMv_=()=>movements;
+ c.writeIssue_=()=>{throw Error('UNEXPECTED_POST');};
+ return c;
+}
+test('real requisition issue blocks unknown and hybrid formulas before any posting',()=>{
+ for(const f of ['', '=CUSTOM_STOCK(A8)', canonical(8)+"+SUM('รายการใบเบิก'!D2:D)"])
+   assert.throws(()=>issueContext(f).setReqStatus('QA','issue'),/สูตรจ่ายออกยังไม่ผ่าน/);
+});
+test('REQ MovementID blocks duplicate posting even with missing or changed DocumentNo',()=>{
+ for(const doc of ['', 'EDITED', 'RQ-QA']) {
+   const c=issueContext(canonical(8),[{id:'REQ-QA-1',doc,code:'SKU',qty:2,type:'จ่ายออก'}]);
+   assert.throws(()=>c.setReqStatus('QA','issue'),/จ่ายสินค้าไปแล้ว/);
+ }
+});
+test('legacy DocumentNo still blocks duplicate requisition posting',()=>{
+ assert.throws(()=>issueContext(canonical(8),[{id:'ROW-4',doc:'RQ-QA'}])
+   .setReqStatus('QA','issue'),/จ่ายสินค้าไปแล้ว/);
+});
+test('hybrid requisition counterexample doubles issued quantity; SALE reversal nets to zero in real balances_',()=>{
+ const c=context([canonical(8)]),items=[['SKU','','','',1,10]];
+ const req={id:'REQ-QA-1',code:'SKU',qty:2,type:'จ่ายออก'};
+ assert.equal(c.balances_(items,[req]).SKU,8);
+ // Arithmetic counterexample only, not a Google Sheets formula evaluator:
+ // ledger issue 2 + paid-requisition fallback 2 => H=4, I=6 rather than 8.
+ const hybridIssued=req.qty+2;
+ assert.equal(10-hybridIssued,6);
+ assert.notEqual(10-hybridIssued,c.balances_(items,[req]).SKU);
+ const sale={id:'SALE-QA-L1',code:'SKU',qty:3,type:'จ่ายออก'};
+ const reversal={id:'SALE-REV-QA-L1',code:'SKU',qty:3,type:'รับเข้า'};
+ assert.equal(c.balances_(items,[sale]).SKU,7);
+ assert.equal(c.balances_(items,[sale,reversal]).SKU,10);
+ // SUMIFS/balances_ do not deduplicate ledger IDs. Formula shape cannot certify history.
+ assert.equal(c.balances_(items,[sale,sale]).SKU,4);
+ assert.equal(c.balances_(items,[sale,reversal,reversal]).SKU,13);
+});

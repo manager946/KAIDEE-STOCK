@@ -36,3 +36,16 @@ for(const crash of [false,true]) test('actual staging lifecycle, duplicate posti
  assert.equal(x.stagingReverseOrder(id,'QA return').reused,true);assert.equal(f.balance(),100);
  assert.equal(f.sheets['บันทึกรับ-จ่าย'].rows.filter(r=>r?.[10]).length,4);
 });
+
+test('actual SALE posting rejects duplicate MovementID before changing stock',()=>{
+ const f=fixture(),x=f.ctx;
+ const id=x.stagingCreateOrder({clientMutationId:'QA-DUP-1234',customer:'Dummy',lines:[{code:'QA-SKU',qty:2,price:1}]}).orderId;
+ x.stagingConvertOrder(id);x.stagingShipOrder(id);
+ const rows=f.sheets['บันทึกรับ-จ่าย'].rows;
+ rows.push([...rows.find(r=>r?.[10]?.startsWith('SALE-'))]);
+ const before=JSON.stringify(rows);
+ assert.throws(()=>x.stagingShipOrder(id),/MovementID ซ้ำ/);
+ assert.throws(()=>x.stagingReverseOrder(id,'QA'),/ยังไม่พบการส่งมอบครบทุกบรรทัด/);
+ assert.equal(JSON.stringify(rows),before);
+ assert.equal(f.balance(),96); // existing corruption is detected, never silently deduplicated/repaired
+});
