@@ -32,6 +32,15 @@ The original Code.gs was temporarily used for the negative control and restored 
 - Movement-only formula shape does not certify ledger uniqueness: duplicate SALE issue rows lower balance twice, and duplicate return rows inflate it. Existing corrupt rows require separate read-only reconciliation and an explicitly approved migration.
 - REQ writes are still multi-step and not transactionally atomic. A crash before metadata is written can leave active stock without ID/DocumentNo; this patch cannot identify that row. A partial issue with metadata is blocked for manual review, not resumed automatically.
 - REQ IDs use line positions. Reordered/changed historical lines need separate reconciliation. `readMv_()` only returns active receipt/issue types; incomplete/inert rows are outside this guard.
-- No live Google integration, real formula evaluation, deployment, or Production validation was run. SALE reversal original-payload integrity and legacy historical data need separate review; normal/retry reversal tests do not certify all corrupted-data scenarios.
+- No live Google integration, real formula evaluation, deployment, or Production validation was run. Legacy historical data and corrupted-data scenarios beyond the tested cases still need separate review.
 
 Keep the PR Draft pending review. Do not deploy or unblock real requisitions based only on these offline results.
+
+## PR #5 follow-up: reversal source integrity
+
+Review reproduced an existing defect: opening 100, shipment 2 leaves 98; changing the sale line quantity to 5 allowed a return to inflate stock to 103. The reversal path now compares original SALE movement SKU, quantity and DocumentNo with the return plan before any journal or ledger writes. Mismatch blocks for manual review; nothing is repaired.
+
+- Negative control on commit 06ad4a3: three new tests FAIL (quantity, SKU and document mismatch; missing expected exception), three existing lifecycle tests PASS.
+- Updated full `npm test`: PASS 74/74, zero failures/skips. Each mismatch test also verifies all mock sheet rows remain unchanged.
+- Normal shipment/reversal, retries and partial shipment recovery continue to pass.
+- GitHub review/CI status remains unverified while api.github.com is blocked. Local tests are not CI evidence.

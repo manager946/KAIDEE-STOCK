@@ -330,6 +330,9 @@ function stagingShipCore_(ss,id,kind,reason) {
       const from=existingById['SALE-'+lines[i].id]||[];
       if(from.length!==1||from[0].type!=='จ่ายออก')
         throw new Error('ยังไม่พบการส่งมอบครบทุกบรรทัด');
+      // Reverse only the exact original stock effect, before journal or ledger writes.
+      if(from[0].code!==x.code || from[0].qty!==x.qty || from[0].doc!==x.doc)
+        throw new Error('รายการส่งมอบต้นทางไม่ตรงกับรายการคืน ต้องตรวจด้วยคนก่อน');
     });
   }
   const required={};

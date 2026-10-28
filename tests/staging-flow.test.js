@@ -49,3 +49,18 @@ test('actual SALE posting rejects duplicate MovementID before changing stock',()
  assert.equal(JSON.stringify(rows),before);
  assert.equal(f.balance(),96); // existing corruption is detected, never silently deduplicated/repaired
 });
+
+for(const field of ['quantity','SKU','document']) test('reversal rejects changed original '+field+' before writes',()=>{
+ const f=fixture(),x=f.ctx;
+ const id=x.stagingCreateOrder({clientMutationId:'QA-MISMATCH-1234',customer:'Dummy',lines:[{code:'QA-SKU',qty:2,price:1}]}).orderId;
+ x.stagingConvertOrder(id);x.stagingShipOrder(id);
+ const original=f.sheets['บันทึกรับ-จ่าย'].rows.find(r=>r?.[10]?.startsWith('SALE-'));
+ if(field==='quantity') {
+   f.sheets['รายการขาย'].rows[1][5]=5;
+   f.sheets['รายการขาย'].rows[1][7]=5;
+ } else if(field==='SKU') original[2]='OTHER-SKU';
+ else original[13]='OTHER-DOCUMENT';
+ const before=JSON.stringify(Object.fromEntries(Object.entries(f.sheets).map(([k,s])=>[k,s.rows])));
+ assert.throws(()=>x.stagingReverseOrder(id,'QA mismatch'),/ต้นทางไม่ตรง/);
+ assert.equal(JSON.stringify(Object.fromEntries(Object.entries(f.sheets).map(([k,s])=>[k,s.rows]))),before);
+});
