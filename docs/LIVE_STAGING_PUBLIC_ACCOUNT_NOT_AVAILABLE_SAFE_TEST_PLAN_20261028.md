@@ -25,3 +25,21 @@ This is source-level **synthetic** verification, not a live external-account pas
 
 ## Safety
 No original STAGING or Production modifications. No changes to Google account allowlists or Drive PDF permissions. Draft PR #4 must remain Draft; do not merge or deploy Production on the basis of simulated Public testing.
+
+## CI verified on 2026-10-28 — simulated Public authorization PASS
+
+Workflow: **Stock safety tests**, GitHub Actions run [40652403808](https://github.com/manager946/KAIDEE-STOCK/actions/runs/40652403808), run after commit `450f490e09828450c5be2a7902d86699882a9cf6`.
+
+The workflow job completed **success**, running `npm test` → `node --test tests/*.test.js`. Verified job log shows **58 tests, 58 pass, 0 fail**. In particular, the newly added isolated Public simulation subtests appear in CI as PASS:
+- unlisted Google identity classified as Public (test #7);
+- Public catalog ALLOWED (test #8);
+- Public staff_read/ship/pdf authorization DENIED (test #9);
+- Public admin_only authorization DENIED (test #10);
+- URL role/email spoofing denied (test #12);
+- separate STAGING-source Public function gate tests still PASS.
+
+Change to result: `SOURCE_SIMULATED_PUBLIC: PASS (CI 58/58)`. `REAL_ACCOUNT_PUBLIC: PENDING (no third Google account)` remains unchanged. `REAL_ACCOUNT_STAFF: PASS (isolated probe only)` remains unchanged.
+
+Recommended next nonmutating real-account probe: with **existing Admin account** only, open the same **isolated** deployment's `?action=admin_only` and expect `role:admin`, `status:ALLOWED`, `simulation:ADMIN_BACKEND_GATE_ONLY`, `writesPerformed:false`. This will verify the other side of the matrix before planning real STAGING role coverage. This does not remove the Public-account testing gap.
+
+Never publish CI as proof that the original STAGING backend has been tested end-to-end; PR remains Draft and Production remains gated.
