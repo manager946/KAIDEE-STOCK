@@ -41,6 +41,9 @@ const ADMINS = ['manager@metangprint.org'];
  */
 const STAFF_DOMAIN = 'metangprint.org';
 const STAFF = [];
+// STAGING ONLY: extra exact Gmail addresses are held in Script Properties,
+// not committed to GitHub. Never trust an email supplied by the browser.
+const STAGING_STAFF_EMAILS_PROPERTY = 'KAIDEE_STAGING_STAFF_EMAILS';
 const PUBLIC_SHOW_PRICE = true;            // หน้าบ้านเห็นราคาต่อหน่วยในแคตตาล็อก
 const PUBLIC_ORDER_LIMIT_PER_HOUR = 30;    // จำกัดจำนวนคำสั่งจากหน้าบ้านต่อชั่วโมง กันสแปม
 const PUBLIC_TAG = '[หน้าบ้าน]';
@@ -262,13 +265,48 @@ function admins_() {
   return ADMINS.map(x => String(x).trim().toLowerCase()).filter(Boolean);
 }
 function isAdmin_() { return admins_().indexOf(String(me_()).toLowerCase()) !== -1; }
+function stagingStaffGmailEmails_() {
+  const prop = PropertiesService.getScriptProperties()
+    .getProperty(STAGING_STAFF_EMAILS_PROPERTY);
+  const entries = String(prop || '').split(',');
+  // Exact email allowlist only; no wildcard/domain granting for Gmail.
+  return entries.map(x => x.trim().toLowerCase())
+    .filter(x => /^[a-z0-9._%+-]+@gmail\.com$/.test(x));
+}
 function role_() {
   if (isAdmin_()) return 'admin';
-  const m = String(me_()).toLowerCase();
+  const m = String(me_()).trim().toLowerCase();
+  // Apps Script may hide an external user's email in execute-as-owner mode.
+  // A missing identity MUST NOT gain Staff/Admin access.
   if (!m || m === 'web') return 'public';
   if (STAFF.map(x => String(x).trim().toLowerCase()).indexOf(m) !== -1) return 'staff';
+  if (stagingStaffGmailEmails_().indexOf(m) !== -1) return 'staff';
   if (STAFF_DOMAIN && m.slice(-(STAFF_DOMAIN.length + 1)) === '@' + STAFF_DOMAIN.toLowerCase()) return 'staff';
   return 'public';
+}
+
+// Admin-only, read-only config check. Does not disclose any email address.
+function qaStagingStaffGmailConfigReadOnly() {
+  requireAdmin_();
+  const ss = stagingDb_();
+  if (ss.getId() !== '149kQunDS0c5xxXbcOcNQNsjLWPUINnlSebkG5o-1qys') {
+    throw new Error('STAGING spreadsheet guard failed');
+  }
+  const raw = String(PropertiesService.getScriptProperties()
+    .getProperty(STAGING_STAFF_EMAILS_PROPERTY) || '').trim();
+  const configured = stagingStaffGmailEmails_();
+  const valid = raw !== '' && raw.split(',').length === 1 &&
+    configured.length === 1;
+  const result = {
+    test: 'STAGING_STAFF_GMAIL_ALLOWLIST_CONFIG_READ_ONLY',
+    status: valid ? 'READY_FOR_IDENTITY_TEST' : 'BLOCKED',
+    staffGmailCount: configured.length,
+    currentRole: role_(),
+    identityVerifiedWithRealStaff: false,
+    note: 'READ ONLY. No emails printed, no PDF created, no sharing changed.'
+  };
+  Logger.log(JSON.stringify(result, null, 2));
+  return result;
 }
 function requireStaff_() { if (role_() === 'public') throw new Error('ส่วนนี้สำหรับพนักงานหลังบ้านเท่านั้น'); }
 /** ตรวจสิทธิ์แอดมินจากเซิร์ฟเวอร์ก่อนเปลี่ยนสูตรหรือโครงสร้างชีต */
