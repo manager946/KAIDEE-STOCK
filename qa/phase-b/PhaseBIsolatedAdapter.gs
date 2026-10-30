@@ -57,13 +57,14 @@ function phaseBPreflightReadOnly() {
     throw new Error('PHASEB_STOP: formula audit not safe for 52 synthetic SKUs');
   }
   const reqs = readReqs_(), moves = readMv_(), items = readItems_();
-  const expected = ['QA-PB-001', 'QA-PB-002'];
+  const expected = ['QA-PB-001', 'QA-PB-002', 'QA-PB-003'];
   if (reqs.length !== 2 || reqs.some(r => expected.indexOf(r.id) < 0)) {
     throw new Error('PHASEB_STOP: requisition fixture mismatch');
   }
   const spec = {
     'QA-PB-001': [['QA-001', 2], ['QA-001', 3]],
-    'QA-PB-002': [['QA-002', 4], ['QA-003', 1]]
+    'QA-PB-002': [['QA-002', 4], ['QA-003', 1]],
+    'QA-PB-003': [['QA-004', 2], ['QA-005', 3]]
   };
   reqs.forEach(r => {
     const want = spec[r.id];
@@ -78,13 +79,14 @@ function phaseBPreflightReadOnly() {
   });
   const ids = moves.map(m => m.id);
   if (new Set(ids).size !== ids.length ||
-      moves.some(m => !/^REQ-QA-PB-00[12]-[12]$/.test(m.id) ||
+      moves.some(m => !/^REQ-QA-PB-00[123]-[12]$/.test(m.id) ||
                       m.type !== 'จ่ายออก' || !m.doc || m.qty <= 0)) {
     throw new Error('PHASEB_STOP: unknown or duplicate active ledger rows');
   }
   const balance = balances_(items, moves);
   const keys = ['QA-001', 'QA-002', 'QA-003'];
-  if (keys.some(key => !Number.isFinite(balance[key]))) {
+  if (keys.some(key => !Number.isFinite(balance[key])) ||
+      !Number.isFinite(balance['QA-004']) || !Number.isFinite(balance['QA-005'])) {
     throw new Error('PHASEB_STOP: missing synthetic balance');
   }
   return {
@@ -93,7 +95,8 @@ function phaseBPreflightReadOnly() {
     skuCount: audit.checkedSkuCount,
     requestStatus: reqs.map(r => ({id: r.id, status: r.status})),
     postedMovements: moves.map(m => ({id: m.id, sku: m.code, qty: m.qty, doc: m.doc})),
-    balance: {QA001: balance['QA-001'], QA002: balance['QA-002'], QA003: balance['QA-003']}
+    balance: {QA001: balance['QA-001'], QA002: balance['QA-002'], QA003: balance['QA-003'],
+      QA004: balance['QA-004'], QA005: balance['QA-005']}
   };
 }
 
