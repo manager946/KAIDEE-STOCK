@@ -58,7 +58,7 @@ function phaseBPreflightReadOnly() {
   }
   const reqs = readReqs_(), moves = readMv_(), items = readItems_();
   const expected = ['QA-PB-001', 'QA-PB-002', 'QA-PB-003'];
-  if (reqs.length !== 2 || reqs.some(r => expected.indexOf(r.id) < 0)) {
+  if (reqs.length !== expected.length || reqs.some(r => expected.indexOf(r.id) < 0)) {
     throw new Error('PHASEB_STOP: requisition fixture mismatch');
   }
   const spec = {
