@@ -52,8 +52,11 @@ function b08ReqId_(run, key) { return 'QA-DISP-' + run + '-' + key; }
 function b08HookCheck_() {
   if (typeof B08_BUNDLE_IDENTITY !== 'object' || !B08_BUNDLE_IDENTITY.functionSha256)
     b08Stop_('generated bundle identity missing');
-  const fns = {writeIssue_, setReqStatus, withLock_, stagingDb_, b08Identity_, b08ValidateConfig_,
-    b08FixtureGuard_, b08Reconcile52_, b08Snapshot_, b08Cell_, phaseB08ValidateReadOnly, phaseB08Fault_, savePdf, doGet};
+  if (B08_BUNDLE_IDENTITY.bundleKind !== 'RUNNER') b08Stop_('bundle identity is not RUNNER (seed bundle still installed?)');
+  const fns = {writeIssue_, setReqStatus, withLock_, stagingDb_, b08OpenTarget_, b08BusinessGate_, b08WithSeedReadback_,
+    b08ReadOnly_, setCompany, b08Identity_, b08ValidateConfig_,
+    b08FixtureGuard_, b08SeedStateGuard_, b08AssertFreshFixture_, b08Reconcile52_, b08Snapshot_, b08Cell_,
+    b08IdentityReport_, phaseB08ValidateReadOnly, phaseB08PostSeedReadinessReadOnly, phaseB08Fault_, savePdf, doGet};
   const actual = {};
   Object.keys(fns).forEach(name => {
     actual[name] = b08Sha256Hex_(Function.prototype.toString.call(fns[name]));
@@ -203,7 +206,46 @@ function b08NonEvidenceProps_() {
   return out;
 }
 
+/**
+ * F-12: real Apps Script identity, read-only. Exercises the unchanged business chain
+ * Session -> me_() -> role_() -> requireStaff_() exactly as setReqStatus() will. Never prints the
+ * email; never changes ADMINS. A standalone P1 run from the editor by its owner reports the owner.
+ */
+function b08IdentityReport_() {
+  const active = String(Session.getActiveUser().getEmail() || '');
+  const effective = String(Session.getEffectiveUser().getEmail() || '');
+  const role = role_();
+  let staffOk = true, why = '';
+  try { requireStaff_(); } catch (e) { staffOk = false; why = String(e && e.message || e); }
+  return {activeUserEmailPresent: active !== '', activeEqualsEffective: active !== '' && active === effective,
+    role, staffOk, reason: why};
+}
+
 /* ======================= Editor entry points ======================= */
+
+/** F-12: identity preflight. Zero writes. STOPs unless the runner identity can pass requireStaff_(). */
+function phaseB08IdentityPreflightReadOnly() {
+  const who = b08Identity_();
+  const r = b08IdentityReport_();
+  if (!r.activeUserEmailPresent) b08Stop_('active user email is empty (execute-as/consumer limitation); run from the editor as the P1 owner');
+  if (!r.staffOk || (r.role !== 'admin' && r.role !== 'staff')) b08Stop_('identity cannot run business workflow (role=' + r.role + '); do NOT edit ADMINS — use the owner account');
+  return b08Log_({status: 'PHASEB08_IDENTITY_READY_READ_ONLY', run: who.run, role: r.role,
+    activeUserEmailPresent: true, activeEqualsEffective: r.activeEqualsEffective});
+}
+
+/** F-11: one-time post-seed readiness (seeder removed, RUNNER identity). Zero writes. */
+function phaseB08PostSeedReadinessReadOnly() {
+  const who = b08Identity_();
+  if (PropertiesService.getScriptProperties().getProperty(B08_ARM) !== null) b08Stop_('stale PHASEB08_ARM present');
+  const att = b08HookCheck_();
+  const done = b08SeedStateGuard_(who.run);
+  const g = b08FixtureGuard_(who.run);
+  const fresh = b08AssertFreshFixture_(g);
+  const id = b08IdentityReport_();
+  if (!id.staffOk) b08Stop_('identity cannot run business workflow (role=' + id.role + ')');
+  return b08Log_({status: 'PHASEB08_POST_SEED_READY_READ_ONLY', run: who.run, seedState: 'COMPLETED',
+    baselineSha256: done.baselineSha256, fixture: fresh, role: id.role, attestation: att.bundle});
+}
 
 /** G: zero-write readiness. Run first; share the sanitized log. */
 function phaseB08ValidateReadOnly() {

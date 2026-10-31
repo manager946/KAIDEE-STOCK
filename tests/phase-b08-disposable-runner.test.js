@@ -17,7 +17,8 @@ test('G-0 readiness is zero-write and opens only the bound target', () => {
   assert.equal(r.status, 'PHASEB08_READY_READ_ONLY');
   assert.equal(r.requests.length, 7);
   assert.equal(t.writes.length, 0);
-  assert.deepEqual(Object.keys(t.props).filter(k => /^PHASEB08_|^REQ_ISSUE/.test(k)), []);
+  assert.deepEqual(Object.keys(t.props).filter(k => /^PHASEB08_|^REQ_ISSUE/.test(k)).sort(), ['PHASEB08_SEED_DONE', 'PHASEB08_SEED_STATE'],
+    'only the seed markers exist; readiness wrote nothing');
   onlyTargetOpened(t);
 });
 
@@ -454,7 +455,7 @@ test('F-7 readiness without arm reports armed:false and lists real evidence keys
   const t = runtime({props: baseProps({PHASEB08_LOCK_A: '{}'})});
   const r = t.ctx.phaseB08ValidateReadOnly();
   assert.equal(r.armed, false);
-  assert.deepEqual([...r.evidenceKeys], ['PHASEB08_LOCK_A']);
+  assert.deepEqual([...r.evidenceKeys], ['PHASEB08_LOCK_A', 'PHASEB08_SEED_DONE', 'PHASEB08_SEED_STATE']);
 });
 
 test('F-5/F-6/F-7 guards are runtime-attested: a weakened editor copy STOPs before any run', () => {

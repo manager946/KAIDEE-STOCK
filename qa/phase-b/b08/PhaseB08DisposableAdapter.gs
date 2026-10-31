@@ -78,12 +78,106 @@ function b08Identity_() {
 }
 
 /** Replaces stagingDb_ ONLY in the disposable bundle; Code.gs ss_() routes here. */
-function stagingDb_() {
+/**
+ * The ONLY Spreadsheet source in every B08 bundle (F-9). Identity-level checks that do not
+ * need any seeded content: project identity, target ID/hash, denylist, triggers, opened ID
+ * and title metadata. Used by the post-seed stagingDb_() and by the pre-seed guard.
+ */
+function b08OpenTarget_() {
   const who = b08Identity_();
   const ss = SpreadsheetApp.openById(who.id);
   if (ss.getId() !== who.id) b08Stop_('opened spreadsheet ID mismatch');
   const name = ss.getName();
   if (B08.protectedTitles.indexOf(name) >= 0 || name !== who.title) b08Stop_('spreadsheet title mismatch');
+  return {ss, who};
+}
+
+/** Execution-local flag; only b08WithSeedReadback_ (called by the seeder) raises it. Not editor-callable. */
+const B08_SEED_READBACK = {depth: 0};
+
+/**
+ * F-13 seed-completion gate for EVERY business mutation. Runs (a) as the first statement of
+ * withLock_ in the QA copy of Code.gs (no exemption) and (b) inside stagingDb_() before any
+ * spreadsheet object is returned. Business access requires: RUNNER bundle identity, seeder
+ * absent and seed state COMPLETED. The only exemption is the seeder's own read-back
+ * (opts.allowSeedReadback, stagingDb_ only): SEED identity, seeder installed, state STARTED,
+ * and the caller receives a read-only proxy. withLock_ never passes allowSeedReadback, so no
+ * locked business workflow (setReqStatus, saveReq, ...) can run during a seed read-back.
+ */
+function b08BusinessGate_(opts) {
+  const who = b08Identity_();
+  const kind = typeof B08_BUNDLE_IDENTITY === 'object' && B08_BUNDLE_IDENTITY ? B08_BUNDLE_IDENTITY.bundleKind : null;
+  const seederInstalled = typeof phaseB08SeedDisposableOnce !== 'undefined' || typeof b08SeedLayout_ !== 'undefined';
+  if (opts && opts.allowSeedReadback && B08_SEED_READBACK.depth > 0) {
+    const state = PropertiesService.getScriptProperties().getProperty('PHASEB08_SEED_STATE');
+    if (kind !== 'SEED' || !seederInstalled || state !== 'STARTED') b08Stop_('seed read-back not permitted (kind/seeder/state)');
+    return 'SEED_READBACK';
+  }
+  if (kind !== 'RUNNER') b08Stop_('business mutation blocked: bundle identity is ' + (kind || 'missing') + ', not RUNNER');
+  if (seederInstalled) b08Stop_('business mutation blocked: seeder still installed');
+  try { b08SeedStateGuard_(who.run); } catch (e) { b08Stop_('business mutation blocked: ' + String(e.message).replace('PHASEB08_STOP: ', '')); }
+  return 'RUNNER';
+}
+
+/** Seeder-only: run fn as a read-only seed read-back (SEED identity, seeder installed, state STARTED). */
+function b08WithSeedReadback_(fn) {
+  const kind = typeof B08_BUNDLE_IDENTITY === 'object' && B08_BUNDLE_IDENTITY ? B08_BUNDLE_IDENTITY.bundleKind : null;
+  if (kind !== 'SEED' || typeof phaseB08SeedDisposableOnce === 'undefined' ||
+      PropertiesService.getScriptProperties().getProperty('PHASEB08_SEED_STATE') !== 'STARTED')
+    b08Stop_('seed read-back not permitted (kind/seeder/state)');
+  B08_SEED_READBACK.depth++;
+  try { return fn(); } finally { B08_SEED_READBACK.depth--; }
+}
+
+/**
+ * F-15: explicit per-kind ALLOWLIST for the seed read-back facade. Anything not listed STOPs
+ * by default (no prefix blacklist). 'Sheet'/'Range'/'Sheet[]' entries return a new facade, never
+ * a raw Google object; 'value' entries must return plain data (primitives, Dates, arrays of them).
+ */
+const B08_READONLY_ALLOW = Object.freeze({
+  Spreadsheet: Object.freeze({getSheetByName: 'Sheet', getSheets: 'Sheet[]', getName: 'value', getId: 'value'}),
+  Sheet: Object.freeze({getRange: 'Range', getLastRow: 'value', getLastColumn: 'value', getName: 'value'}),
+  Range: Object.freeze({getValues: 'value', getDisplayValues: 'value', getFormulas: 'value', getFormula: 'value',
+    getValue: 'value', getDisplayValue: 'value'})
+});
+
+/** Read-only facade (default deny). The raw object is captured in a closure, never exposed. */
+function b08ReadOnly_(raw, kind) {
+  kind = kind || 'Spreadsheet';
+  const allow = B08_READONLY_ALLOW[kind];
+  if (!allow || raw === null || typeof raw !== 'object') b08Stop_('read-only seed read-back: invalid ' + kind);
+  const plain = v => v === null || typeof v !== 'object' || Object.prototype.toString.call(v) === '[object Date]' ||
+    (Array.isArray(v) && v.every(plain));
+  const deny = what => () => b08Stop_('read-only seed read-back: ' + kind + '.' + what + ' not allowed');
+  return new Proxy(Object.freeze(Object.create(null)), {
+    get(_t, key) {
+      if (typeof key !== 'string') return undefined;
+      const ret = Object.prototype.hasOwnProperty.call(allow, key) ? allow[key] : null;
+      if (!ret) return deny(key);
+      return (...args) => {
+        const out = raw[key].apply(raw, args);
+        if (ret === 'value') {
+          if (!plain(out)) b08Stop_('read-only seed read-back: ' + kind + '.' + key + ' returned an object');
+          return out;
+        }
+        if (ret === 'Sheet[]') return out.map(x => b08ReadOnly_(x, 'Sheet'));
+        return out === null ? null : b08ReadOnly_(out, ret);
+      };
+    },
+    set(_t, key) { return deny('set ' + String(key))(); },
+    defineProperty(_t, key) { return deny('define ' + String(key))(); },
+    deleteProperty(_t, key) { return deny('delete ' + String(key))(); },
+    has() { return false; },
+    ownKeys() { return []; },
+    getPrototypeOf() { return null; },
+    setPrototypeOf() { return deny('setPrototypeOf')(); }
+  });
+}
+
+/** Post-seed guard (unchanged strictness): b08OpenTarget_ + seed gate + tabs, sentinel, binding, 52 SKUs. */
+function stagingDb_() {
+  const t = b08OpenTarget_(), ss = t.ss, who = t.who;
+  const mode = b08BusinessGate_({allowSeedReadback: true});
   const tabs = ss.getSheets().map(s => s.getName()).sort();
   if (JSON.stringify(tabs) !== JSON.stringify(B08.tabs.slice().sort())) b08Stop_('unexpected tabs');
   const inv = ss.getSheetByName('คลังสินค้า');
@@ -93,7 +187,7 @@ function stagingDb_() {
   const codes = inv.getRange(8, 1, 52, 1).getDisplayValues().map(r => r[0]);
   if (!codes.every((c, i) => c === 'QA-' + ('000' + (i + 1)).slice(-3))) b08Stop_('unexpected SKU identity');
   if (inv.getRange(60, 1).getDisplayValue() !== '') b08Stop_('unexpected SKU beyond row 59');
-  return ss;
+  return mode === 'SEED_READBACK' ? b08ReadOnly_(ss) : ss;
 }
 
 /** Disposable fixture: request key -> ordered [SKU, qty] lines. Every request must exist with exactly these lines. */
@@ -108,6 +202,33 @@ const B08_FIXTURE = Object.freeze({
 });
 const b08Blank_ = row => row.every(x => x === '' || x == null);
 
+/** Header rows written by the seeder and checked by post-seed readiness (F-11). Labels are synthetic. */
+const B08_HEADERS = Object.freeze({
+  inv: ['รหัส/รุ่นสินค้า', 'ชื่อสินค้า (synthetic)', 'รายละเอียด (synthetic)', 'หน่วย (synthetic)', 'ราคา',
+    'ยอดยกมา', 'รับเข้า', 'จ่ายออก', 'คงเหลือ', 'จุดเตือนเหลือน้อย'],
+  mv: ['วันที่', 'ประเภท', 'รหัส/รุ่นสินค้า', 'รายละเอียด', 'จำนวน', 'หน่วย', 'ราคา/หน่วย', 'มูลค่า', 'ผู้บันทึก',
+    'หมายเหตุ', 'MovementID', 'บันทึกเมื่อ', 'บันทึกโดย', 'DocumentNo'],
+  rq: ['ReqID', 'เลขที่', 'วันที่', 'ผู้ขอ', 'แผนก', 'เหตุผล', 'สถานะ', 'ผู้อนุมัติ', 'ผู้จ่าย', 'วันที่จ่าย', 'ผู้สร้าง'],
+  ln: ['LineID', 'ReqID', 'รหัส/รุ่นสินค้า', 'จำนวน', 'หมายเหตุ']
+});
+
+/**
+ * Seed state machine (F-11): absent = NOT_STARTED -> STARTED -> COMPLETED, or REVIEW_REQUIRED.
+ * Runners require COMPLETED + a matching PHASEB08_SEED_DONE. Nothing ever resets these keys.
+ * The recorded baseline hash is evidence only; it is never compared after tests mutate data.
+ */
+function b08SeedStateGuard_(run) {
+  const props = PropertiesService.getScriptProperties();
+  const state = props.getProperty('PHASEB08_SEED_STATE'), raw = props.getProperty('PHASEB08_SEED_DONE');
+  if (props.getProperty('PHASEB08_SEED_ERROR') !== null) b08Stop_('seed error recorded; REVIEW_REQUIRED');
+  if (state !== 'COMPLETED') b08Stop_('seed state is ' + (state || 'NOT_STARTED') + ', not COMPLETED');
+  let done;
+  try { done = JSON.parse(raw); } catch (_e) { b08Stop_('PHASEB08_SEED_DONE missing or unreadable'); }
+  if (!done || done.run !== run || !/^[0-9a-f]{64}$/.test(String(done.baselineSha256)) ||
+      done.headers !== 7 || done.lines !== 8 || done.skus !== 52) b08Stop_('PHASEB08_SEED_DONE does not match this run/fixture');
+  return done;
+}
+
 /**
  * Relationship-level fixture guard (F-5). Reads RAW sheet rows (not the filtered
  * readReqs_/readMv_ views) and proves header <-> line <-> movement <-> intent
@@ -116,6 +237,12 @@ const b08Blank_ = row => row.every(x => x === '' || x == null);
  */
 function b08FixtureGuard_(run, opts) {
   const allowMissingIntent = !!(opts && opts.allowMissingIntent);
+  // opts.seeding is passed ONLY by the seeder's own post-write verification (statically enforced).
+  if (!(opts && opts.seeding)) {
+    if (typeof phaseB08SeedDisposableOnce !== 'undefined' || typeof b08SeedLayout_ !== 'undefined')
+      b08Stop_('seeder still installed: delete B08_Seeder_QA_ONLY.gs and install the RUNNER bundle identity');
+    b08SeedStateGuard_(run);
+  }
   const P = 'QA-DISP-' + run + '-';
   const keyOf = id => id.indexOf(P) === 0 ? id.slice(P.length) : null;
   const rqSh = sh_(SH.rq), lnSh = sh_(SH.ln);
@@ -189,7 +316,31 @@ function b08FixtureGuard_(run, opts) {
   const rec = b08Reconcile52_();
   if (rec.mismatches.length) b08Stop_('52-SKU reconciliation failed: ' + rec.mismatches.slice(0, 3).join('; '));
   return {reqs: Object.keys(heads).map(id => ({id, status: heads[id].status})),
+    headerCount: Object.keys(heads).length,
+    lineCount: Object.keys(heads).reduce((n, id) => n + heads[id].lines.length, 0),
+    intentCount: Object.keys(props).filter(k => k.indexOf('REQ_ISSUE_V1_') === 0).length,
     moveCount: Object.keys(ids).length, formula: audit.status, reconciliation: rec};
+}
+
+/**
+ * Fresh-fixture assertion shared by the seeder verification and post-seed readiness (F-11):
+ * 4 tabs + headers, 7 approved headers, 8 lines, 52 SKUs, F/G/H/I reconciled, 0 movements,
+ * 0 intents. Only valid immediately after seeding — never used after tests change data.
+ */
+function b08AssertFreshFixture_(g) {
+  const ss = stagingDb_();
+  const row = (tab, r, n) => ss.getSheetByName(tab).getRange(r, 1, 1, n).getDisplayValues()[0];
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  if (!same(row('คลังสินค้า', 7, 10), B08_HEADERS.inv)) b08Stop_('inventory header row 7 mismatch');
+  if (!same(row('บันทึกรับ-จ่าย', 3, 14), B08_HEADERS.mv)) b08Stop_('ledger header row 3 mismatch');
+  if (!same(row('ใบเบิกสินค้า', 1, 11), B08_HEADERS.rq)) b08Stop_('requisition header row mismatch');
+  if (!same(row('รายการใบเบิก', 1, 5), B08_HEADERS.ln)) b08Stop_('line header row mismatch');
+  if (g.headerCount !== 7 || g.lineCount !== 8) b08Stop_('fixture must have 7 headers and 8 lines');
+  if (g.reqs.some(r => r.status !== 'อนุมัติ')) b08Stop_('fresh fixture requests must all be approved');
+  if (g.moveCount !== 0 || g.intentCount !== 0) b08Stop_('fresh fixture must have 0 movements and 0 intents');
+  if (g.reconciliation.checked !== 52 || g.reconciliation.totalIssued !== 0 || g.reconciliation.mismatches.length)
+    b08Stop_('fresh fixture reconciliation must be 52/52 with zero issues');
+  return {headers: 7, lines: 8, skus: 52, movements: 0, intents: 0};
 }
 
 /**

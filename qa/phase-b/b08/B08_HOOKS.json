@@ -1,5 +1,5 @@
 {
-  "comment": "QA-ONLY transform spec for the disposable bundle. Applied to a COPY of apps-script/Code.gs by scripts/b08-qa-bundle.js. Never applied in the repository source. 'hooks' insert fault points; 'neutralize' replaces whole functions that reach Drive/HtmlService with fail-closed stubs.",
+  "comment": "QA-ONLY transform spec for the disposable bundle. Applied to a COPY of apps-script/Code.gs by scripts/b08-qa-bundle.js. Never applied in the repository source. 'hooks' insert fault points and the business mutation gate; 'neutralize' replaces whole functions with fail-closed stubs.",
   "baseCodeSha256": "4636e966ac1412366cf7e1657ba3ed2c5790c8380702d6a17c5caf6734ca460b",
   "hooks": [
     {
@@ -16,6 +16,11 @@
       "point": "AFTER_ACTIVATE",
       "anchor": "  found.forEach(m => { if (m.v[1] === '') sh.getRange(m.row, 2).setValue('จ่ายออก'); });",
       "replacement": "  found.forEach(m => { if (m.v[1] === '') { sh.getRange(m.row, 2).setValue('จ่ายออก'); phaseB08Fault_('AFTER_ACTIVATE', r.id); } }); // B08 QA-ONLY HOOK"
+    },
+    {
+      "point": "BUSINESS_GATE",
+      "anchor": "  const lock = LockService.getScriptLock();",
+      "replacement": "  b08BusinessGate_(); // B08 QA-ONLY HOOK\n  const lock = LockService.getScriptLock();"
     }
   ],
   "neutralize": [
@@ -32,6 +37,13 @@
       "sha256": "e3631960a74ff371c54575783e6799fd2771800a4c7da6018ba023171b1f8591",
       "reason": "Only DriveApp/setSharing path in Code.gs; docType 'stock' reaches Drive without stagingDb_ (F-1)",
       "stub": "function savePdf() { throw new Error('PHASEB08_STOP: PDF export and file sharing disabled in disposable QA bundle'); } // B08 QA-ONLY NEUTRALIZED"
+    },
+    {
+      "name": "setCompany",
+      "signature": "function setCompany(c) {",
+      "sha256": "36357707e67ad541c229b33bc09190db883fc014dcb41058ffbbe958be28e7ab",
+      "reason": "Only business mutation that writes (Script Property COMPANY) without withLock_/stagingDb_ (F-13)",
+      "stub": "function setCompany() { throw new Error('PHASEB08_STOP: company settings mutation disabled in disposable QA bundle'); } // B08 QA-ONLY NEUTRALIZED"
     }
   ]
 }

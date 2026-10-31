@@ -28,21 +28,41 @@ function makeSheet(name, cells = {}) {
   const data = new Map(Object.entries(cells));
   let maxRows = 1000;
   const lastRow = () => { let m = 0; for (const [k, x] of data) if (x.v !== '' || x.f) m = Math.max(m, +k.split(',')[0]); return m; };
+  const lastCol = () => { let m = 0; for (const [k, x] of data) if (x.v !== '' || x.f) m = Math.max(m, +k.split(',')[1]); return m; };
   const cell = (r, c) => data.get(r + ',' + c) || {v: '', f: ''};
   const put = (r, c, x) => data.set(r + ',' + c, x);
   const sh = {
-    data, getName: () => name, getLastRow: lastRow, getMaxRows: () => maxRows,
+    data, getName: () => name, getLastRow: lastRow, getLastColumn: lastCol, getMaxRows: () => maxRows,
+    setName: n => { const old = name; name = n; sh.onRename(old, n); return sh; },
+    appendRow: row => { sh.onWrite(name, lastRow() + 1, 1, '<appendRow>'); row.forEach((v, j) => put(lastRow() + 1, j + 1, {v, f: ''})); },
+    hideSheet: () => { sh.onWrite(name, 0, 0, '<hideSheet>'); },
+    protect: () => { sh.onWrite(name, 0, 0, '<protect>'); return {}; },
+    getParent: () => sh.parent,
+    onRename: () => {},
     insertRowAfter: () => { maxRows++; },
     getRange(r, c, n = 1, m = 1) {
       const grid = fn => Array.from({length: n}, (_, i) => Array.from({length: m}, (_, j) => fn(cell(r + i, c + j))));
-      const val = x => (x.f && !x.pin && sh.evaluate ? sh.evaluate(x.f) : x.v);
+      const val = x => (x.f && !x.pin && sh.evaluate && name === 'คลังสินค้า' ? sh.evaluate(x.f) : x.v);
       return {
         getValues: () => grid(val), getFormulas: () => grid(x => x.f || ''),
         getDisplayValues: () => grid(x => { const v = val(x); return v instanceof Date ? v.toISOString() : String(v); }),
         getDisplayValue: () => String(val(cell(r, c))), getFormula: () => cell(r, c).f || '',
         setValue: v => { sh.onWrite(name, r, c, v); put(r, c, {v, f: ''}); },
         setFormula: f => { sh.onWrite(name, r, c, f); put(r, c, {v: '', f}); },
-        setValues: vals => vals.forEach((row, i) => row.forEach((v, j) => { sh.onWrite(name, r + i, c + j, v); put(r + i, c + j, {v, f: ''}); }))
+        setValues: vals => vals.forEach((row, i) => row.forEach((v, j) => { sh.onWrite(name, r + i, c + j, v); put(r + i, c + j, {v, f: ''}); })),
+        setFormulas: fs => fs.forEach((row, i) => row.forEach((f, j) => { sh.onWrite(name, r + i, c + j, f); put(r + i, c + j, {v: '', f}); })),
+        // Real Apps Script Range mutators whose names do NOT start with set/insert/delete (F-15).
+        // In the double they record a write, so any read-only bypass becomes observable.
+        breakApart: () => { sh.onWrite(name, r, c, '<breakApart>'); },
+        splitTextToColumns: () => { sh.onWrite(name, r, c, '<splitTextToColumns>'); put(r, c, {v: 'split', f: ''}); },
+        trimWhitespace: () => { sh.onWrite(name, r, c, '<trimWhitespace>'); },
+        randomize: () => { sh.onWrite(name, r, c, '<randomize>'); },
+        merge: () => { sh.onWrite(name, r, c, '<merge>'); },
+        check: () => { sh.onWrite(name, r, c, '<check>'); },
+        removeDuplicates: () => { sh.onWrite(name, r, c, '<removeDuplicates>'); },
+        createFilter: () => { sh.onWrite(name, r, c, '<createFilter>'); return {remove: () => {}}; },
+        copyTo: () => { sh.onWrite(name, r, c, '<copyTo>'); },
+        getSheet: () => sh
       };
     },
     onWrite: () => {}
@@ -88,7 +108,13 @@ function cloneBook(book, overrides = {}) {
   return Object.assign({id: book.id, title: book.title, sheets}, overrides);
 }
 
-function baseProps(o = {}) {
+/** Blank single-sheet workbook as created by sheets.new (pre-seed state). */
+function blankBook({title = 'KAIDEE-STOCK-DISPOSABLE-QA-B08-' + RUN, id = IDS.target, sheet = 'แผ่น1'} = {}) {
+  return {id, title, sheets: {[sheet]: makeSheet(sheet)}};
+}
+
+/** Configuration only, seed state NOT_STARTED (pre-seed). */
+function preSeedProps(o = {}) {
   return Object.assign({
     KAIDEE_B08_TARGET_ID: IDS.target, KAIDEE_B08_TARGET_SHA256: sha(IDS.target),
     KAIDEE_B08_SCRIPT_SHA256: sha(IDS.script), KAIDEE_B08_RUN_ID: RUN, KAIDEE_B08_ROLE: 'TEST',
@@ -96,28 +122,58 @@ function baseProps(o = {}) {
   }, o);
 }
 
+/** Post-seed state used by runner tests: seed COMPLETED for this run (baseline hash is evidence only). */
+function baseProps(o = {}) {
+  return preSeedProps(Object.assign({
+    PHASEB08_SEED_STATE: 'COMPLETED',
+    PHASEB08_SEED_DONE: JSON.stringify({run: RUN, completedAt: '2026-11-01T00:00:00.000Z', baselineSha256: 'b'.repeat(64),
+      headers: 7, lines: 8, skus: 52})
+  }, o));
+}
+
 /** Builds a runtime: bundle executed against doubles. */
 function runtime(opts = {}) {
   const src = bundleLib.loadSources();
   // opts.transform: in-memory source mutation for defense-in-depth layer tests only.
   if (opts.transform) opts.transform(src);
-  const {hooked} = bundleLib.staticVerify(src);
-  const identity = bundleLib.identitySource(src, hooked, 'TEST');
+  // opts.seedBundle: SEED bundle (runner + seeder + SEED identity) instead of the RUNNER bundle.
+  const kind = opts.seedBundle ? 'SEED' : 'RUNNER';
+  const {hooked} = opts.seedBundle ? bundleLib.staticVerifySeed(src) : bundleLib.staticVerify(src);
+  const identity = bundleLib.identitySource(src, hooked, 'TEST', opts.identityKind || kind);
   const book = opts.book || seed();
   const props = opts.props || baseProps();
   const log = [], writes = [], opened = [], timeline = [];
   const sticky = new Set(opts.stickyKeys || []); // deleteProperty silently ignored (simulated service fault)
   let clock = opts.clock || Date.parse('2026-10-31T03:00:00Z');
   let lockHeld = false;
+  // Script-lock double. Offline only: models a held lock deterministically, NOT real Apps Script concurrency.
   const lock = {waitLock: ms => { log.push(['wait', ms]); if (opts.lockBusy || lockHeld) { clock += ms; throw new Error('Lock timeout: another process was holding the lock for too long.'); } lockHeld = true; },
+    tryLock: ms => { log.push(['tryLock', ms]); timeline.push(['tryLock']); if (opts.lockBusy || lockHeld) { clock += ms; return false; } lockHeld = true; return true; },
+    hasLock: () => lockHeld,
     releaseLock: () => { lockHeld = false; log.push(['release']); timeline.push(['release']); }};
-  Object.values(book.sheets).forEach(s => { s.onWrite = (n, r, c, v) => { writes.push([n, r, c, v]); timeline.push(['write', n, r, c, v]); }; });
-  const inv = book.sheets['คลังสินค้า'], led = book.sheets['บันทึกรับ-จ่าย'];
+  const lockHeldNow = () => lockHeld;
+  const structure = [];
   // Evaluates the approved G/H SUMIFS and I = F+G-H (resolving referenced cells, honouring pins).
-  const invVal = (r, c) => inv.getRange(r, c).getValues()[0][0];
+  // Sheets are looked up by name at evaluation time so a freshly seeded workbook evaluates too.
+  const invVal = (r, c) => book.sheets['คลังสินค้า'].getRange(r, c).getValues()[0][0];
+  const evaluate = raw => {
+    const inv = book.sheets['คลังสินค้า'], led = book.sheets['บันทึกรับ-จ่าย'];
+    return evalFormula(raw, inv, led);
+  };
+  const attach = sh => {
+    sh.onWrite = (n, r, c, v) => { writes.push([n, r, c, v]); timeline.push(['write', n, r, c, v]); };
+    sh.evaluate = evaluate;
+    sh.onRename = (old, nw) => {
+      structure.push(['rename', old, nw]);
+      book.sheets = Object.fromEntries(Object.entries(book.sheets).map(([k, v]) => [k === old ? nw : k, v]));
+    };
+    return sh;
+  };
+  Object.values(book.sheets).forEach(attach);
   // Sheets ignores whitespace/case outside quoted literals; normalize the same way before matching.
   const norm = f => String(f).replace(/("(?:[^"]|"")*"|'(?:[^']|'')*')|([^"']+)/g, (m, q, x) => q || x.replace(/\s+/g, '').toUpperCase());
-  if (inv) inv.evaluate = raw => {
+  function evalFormula(raw, inv, led) {
+    if (!inv) return '#REF!';
     const f = norm(raw);
     const b = BAL_RE.exec(f);
     if (b) { const [F, Gv, Hv] = [6, 7, 8].map(c => invVal(+b[1], c)); return [F, Gv, Hv].every(x => typeof x === 'number') ? F + Gv - Hv : '#VALUE!'; }
@@ -130,9 +186,16 @@ function runtime(opts = {}) {
       if (t === m[2] && cc === code) sum += Number(e) || 0;
     }
     return sum;
-  };
+  }
   const ss = {getId: () => book.id, getName: () => book.title,
-    getSheets: () => Object.values(book.sheets), getSheetByName: n => book.sheets[n] || null};
+    deleteSheet: () => { structure.push(['deleteSheet']); }, getActiveSheet: () => Object.values(book.sheets)[0],
+    getSheets: () => Object.values(book.sheets), getSheetByName: n => book.sheets[n] || null,
+    getNamedRanges: () => opts.namedRanges || [],
+    insertSheet: n => { if (book.sheets[n]) throw new Error('sheet exists'); structure.push(['insertSheet', n]);
+      book.sheets[n] = attach(makeSheet(n)); book.sheets[n].parent = ss; return book.sheets[n]; }};
+  Object.values(book.sheets).forEach(sh => { sh.parent = ss; });
+  const email = Object.prototype.hasOwnProperty.call(opts, 'email') ? opts.email : TEST_ADMIN;
+  const effective = Object.prototype.hasOwnProperty.call(opts, 'effectiveEmail') ? opts.effectiveEmail : email;
   class FakeDate extends Date { constructor(...a) { super(...(a.length ? a : [clock])); } static now() { return clock; } }
   const ctx = {
     console: {log: x => log.push(['log', x])}, Date: FakeDate,
@@ -143,7 +206,8 @@ function runtime(opts = {}) {
     SpreadsheetApp: {openById: id => { opened.push(id); if (id !== book.id) throw new Error('not found'); return ss; },
       flush: () => { log.push(['flush']); timeline.push(['flush']); }},
     LockService: {getScriptLock: () => lock},
-    Session: {getActiveUser: () => ({getEmail: () => TEST_ADMIN}), getScriptTimeZone: () => 'Asia/Bangkok'},
+    Session: {getActiveUser: () => ({getEmail: () => email}), getEffectiveUser: () => ({getEmail: () => effective}),
+      getScriptTimeZone: () => 'Asia/Bangkok'},
     PropertiesService: {getScriptProperties: () => ({
       getProperty: k => (Object.prototype.hasOwnProperty.call(props, k) ? props[k] : null),
       getProperties: () => Object.assign({}, props),
@@ -152,13 +216,14 @@ function runtime(opts = {}) {
     })}
   };
   vm.createContext(ctx);
-  vm.runInContext(hooked + '\n' + src.adapter + '\n' + src.runner + '\n' + identity, ctx);
+  vm.runInContext(hooked + '\n' + src.adapter + '\n' + src.runner + '\n' + (opts.seedBundle ? src.seeder + '\n' : '') + identity, ctx);
   // Test-only Admin allowlist for the sandbox. The real requireStaff_ -> role_ -> isAdmin_ chain still
   // runs; only the source of the allowlist is swapped. apps-script/Code.gs (ADMINS) is not modified.
-  ctx.admins_ = () => [TEST_ADMIN];
-  return {ctx, book, props, log, writes, opened, timeline, run: RUN, IDS,
+  // opts.realAdmins keeps the UNMODIFIED Code.gs allowlist (used to prove no identity elevation).
+  if (!opts.realAdmins) ctx.admins_ = () => [TEST_ADMIN];
+  return {ctx, book, props, log, writes, opened, timeline, structure, run: RUN, IDS, lockHeld: lockHeldNow,
     tick: ms => { clock += ms; }, now: () => clock, setLockHeld: v => { lockHeld = v; },
     bal: code => ctx.balances_(ctx.readItems_(), ctx.readMv_())[code]};
 }
 
-module.exports = {runtime, seed, cloneBook, baseProps, makeSheet, sha, IDS, RUN, FIX, G, H, I, TEST_ADMIN};
+module.exports = {runtime, seed, cloneBook, baseProps, preSeedProps, blankBook, makeSheet, sha, IDS, RUN, FIX, G, H, I, TEST_ADMIN};
