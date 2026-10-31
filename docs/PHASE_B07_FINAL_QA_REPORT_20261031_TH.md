@@ -1,4 +1,4 @@
-# Phase B07 — Final offline QA report / live gate ยังไม่ผ่าน
+# Phase B07 — Final QA report / Live Intent Recovery + Retry PASS
 
 วันที่ 2026-10-31 (Asia/Bangkok), Draft PR #5 เท่านั้น
 สาขา `codex/stock-formula-safety-20261028`; ตรวจต้นทางที่
@@ -6,25 +6,36 @@
 
 ## ตรวจหลักฐาน B07 Recovery ก่อนดำเนินงาน
 
-อ่าน handoff, before-image, helper, adapter และ PR #5 body/comments จริงแล้ว
-PR เป็น OPEN / DRAFT และ head ตรง SHA ข้างต้น ไม่มี comment แนบ recovery log ใหม่
-CI ของ SHA เดิมแสดง pass ใน runs 41167024656 / 41167027729
-ผล CI เป็น offline เท่านั้น
+สถานะล่าสุด supersede checkpoint PENDING ใน handoff และรายงานรอบก่อน
+อ่าน `PHASE_B07_LIVE_RECOVERY_VERIFICATION_20261031_TH.md` ที่มีอยู่จริงใน
+commit `9717a4b0695df440aec39e0a0aa476290be4dbe6` และรับคำยืนยันล่าสุดของผู้ใช้:
 
-หลักฐานใน handoff เป็นรายงานก่อนหน้า: intent 003 present/valid, arm absent,
-ไม่มี ledger 003, 001/002 paid, 003 approved และ 52 balances ตรง before-image
-รอบนี้ไม่มี Google Sheets/Apps Script connector จึงไม่ได้อ่านข้อมูลปัจจุบันหรือ
-Script Properties โดยตรง และไม่ได้ตรวจ execution log ของ Google ใหม่
-ไม่มีหลักฐานใหม่ยืนยัน `PHASEB_B07_RECOVERY_PASS` หรือ independent after-image
-สรุป **B07 real recovery PENDING / ยังไม่อนุญาต release** ไม่ใช่ FAIL ของระบบ
-และไม่ถือว่าการจำลอง offline เป็นหลักฐานว่า crash/recovery จริงสำเร็จ
+- **B07 Live Intent Recovery: PASS** — owner Execution log ระบุ
+  `PHASEB_B07_RECOVERY_PASS`, receipt `ok:true,reused:false`; การตรวจ Google Sheets
+  จริงที่บันทึกไว้ยืนยัน 52/52 SKU reconcile, active movements 6 รายการ ID ไม่ซ้ำ,
+  003 `จ่ายแล้ว` พร้อม issuer/time, QA-004=98 และ QA-005=97
+- **Post-Recovery Retry: PASS ตามคำยืนยันล่าสุดของผู้ใช้** จาก owner Execution log
+  และการตรวจ Google Sheets จริง: 52/52 SKU, 6 movements ไม่มี ID ซ้ำ,
+  003 paid และข้อมูลเดิมคงอยู่ ไม่ใช่ผล offline test
+- รายการเดิม 001/002 และประวัติ 003 ให้คงไว้ทั้งหมด ไม่ใช้เป็น fixture ทดสอบรอบใหม่
+
+Provenance: recovery log/ค่ารายบรรทัดอยู่ในเอกสาร live verification เดิม;
+retry PASS อ้างอิงคำยืนยันผู้ใช้ในงานนี้ ไม่มี raw retry log/execution ID เพิ่มใน checkout
+จึงไม่สร้าง execution ID หรือ receipt ใหม่ขึ้นเอง รอบนี้ไม่ได้อ่าน Google Sheets,
+Execution log หรือ Script Properties โดยตรง และไม่ขยายผลเป็นการพิสูจน์
+exact crash timing, post-recovery properties ทุก key หรือ fault boundaries ทั้งหมด
+exact simulated-crash moment ยังคง INCONCLUSIVE; live gates อื่นยัง PENDING
 
 ## ผลทดสอบใน cloud instance
 
 - Baseline `npm test`: 108 PASS ตาม runner
 - เพิ่ม `tests/phase-b-service-failures.test.js` และ service doubles ใน
   `tests/helpers/recovery-fixture.js`: 10 tests เรียก `apps-script/Code.gs` โดยไม่แก้ source
-- `npm test` หลังเพิ่ม: 118 PASS / 0 FAIL / 0 SKIPPED
+- รอบก่อน `npm test`: 118 PASS / 0 FAIL / 0 SKIPPED
+- รอบนี้เพิ่ม `tests/phase-b-disposable-qa.test.js` อีก 5 กรณี: different-SKU partial commit,
+  lock reacquisition หลัง error, property read outage หลัง paid, full in-memory restore
+  เข้า runtime ใหม่และ negative restore ที่ขาด intent
+- `npm test` รอบนี้: 123 PASS / 0 FAIL / 0 SKIPPED
 - `git diff --check`: PASS
 
 | หัวข้อ | ผล offline | ขอบเขตที่ยังไม่พิสูจน์ |
@@ -49,8 +60,10 @@ tests เดิมที่ทดสอบ B07 helper มี stub setReqStatus; 
 
 ## ข้อสรุป
 
-Offline QA PASS; B07 real recovery, real concurrency, quota และ full restore drill
-ยัง PENDING ต้องได้รับอนุมัติและดำเนินการโดยผู้ใช้ใน QA แยกเท่านั้น
+Offline QA PASS; B07 Live Intent Recovery และ Post-Recovery Retry PASS ตาม provenance ข้างต้น
+Partial Commit, real concurrency, quota และ full restore drill ยัง PENDING
+ต้องขออนุญาตแยกก่อนสร้าง/เขียนข้อมูลทดสอบใหม่ ใช้ Disposable QA Project
+และ Spreadsheet ใหม่เท่านั้น ไม่ใช้ fixture เดิมหรือ 001/002/003
 คง Draft / ห้าม Merge / ห้าม Deploy / ห้ามแก้ PDF ACL หรือ Production
 รายงานนี้ไม่รับรอง CI ของ commit ใหม่จนกว่าจะมี matching-SHA run สำเร็จ
 ดู `PHASE_B07_OWNER_QA_RUNBOOK_20261031_TH.md` สำหรับ gate และหลักฐานที่ต้องส่งกลับ

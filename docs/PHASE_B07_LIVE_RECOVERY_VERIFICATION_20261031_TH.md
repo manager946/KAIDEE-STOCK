@@ -68,3 +68,14 @@ Verified active movements:
 ## 4. Associated offline QA
 
 Before this addendum, matching-SHA CI for `5e5b3ff77e3b1e57c7c2438707a477523fc35861`: [PR run 41167619819](https://github.com/manager946/KAIDEE-STOCK/actions/runs/41167619819) and [push run 41167616006](https://github.com/manager946/KAIDEE-STOCK/actions/runs/41167616006) both **118 PASS / 0 FAIL / 0 SKIPPED**. This evidence document commit requires its **own** matching-HEAD CI verification.
+
+## 5. Owner status update — 2026-10-31
+
+The latest owner instruction confirms **Post-Recovery Retry PASS**, based on owner
+Execution log and actual Google Sheets verification: 52/52 SKU, six movements,
+no duplicate IDs, 003 paid and existing data preserved. This supersedes the retry
+PENDING line in section 3, which remains as the earlier checkpoint. No new raw retry
+log/execution ID was supplied in this checkout; this update records owner attestation,
+not a new direct connector read. Live Intent Recovery remains PASS; exact original
+crash timing remains INCONCLUSIVE. All next fault/rollback tests require separately
+authorized NEW disposable QA Project and Spreadsheet; preserve 001/002/003.
