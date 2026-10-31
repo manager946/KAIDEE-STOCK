@@ -1,0 +1,37 @@
+{
+  "comment": "QA-ONLY transform spec for the disposable bundle. Applied to a COPY of apps-script/Code.gs by scripts/b08-qa-bundle.js. Never applied in the repository source. 'hooks' insert fault points; 'neutralize' replaces whole functions that reach Drive/HtmlService with fail-closed stubs.",
+  "baseCodeSha256": "4636e966ac1412366cf7e1657ba3ed2c5790c8380702d6a17c5caf6734ca460b",
+  "hooks": [
+    {
+      "point": "BEFORE_INTENT_READ",
+      "anchor": "  const key = reqIssueKey_(r.id), saved = props.getProperty(key);",
+      "replacement": "  phaseB08Fault_('BEFORE_INTENT_READ', r.id); // B08 QA-ONLY HOOK\n  const key = reqIssueKey_(r.id), saved = props.getProperty(key);"
+    },
+    {
+      "point": "BEFORE_INTENT_WRITE",
+      "anchor": "    props.setProperty(key, encoded); // durable intent BEFORE any movement write",
+      "replacement": "    phaseB08Fault_('BEFORE_INTENT_WRITE', r.id); // B08 QA-ONLY HOOK\n    props.setProperty(key, encoded); // durable intent BEFORE any movement write"
+    },
+    {
+      "point": "AFTER_ACTIVATE",
+      "anchor": "  found.forEach(m => { if (m.v[1] === '') sh.getRange(m.row, 2).setValue('จ่ายออก'); });",
+      "replacement": "  found.forEach(m => { if (m.v[1] === '') { sh.getRange(m.row, 2).setValue('จ่ายออก'); phaseB08Fault_('AFTER_ACTIVATE', r.id); } }); // B08 QA-ONLY HOOK"
+    }
+  ],
+  "neutralize": [
+    {
+      "name": "doGet",
+      "signature": "function doGet() {",
+      "sha256": "193180db6faae75a50133b29520d33cb165118deabc22e0fe06a7170f5d620dc",
+      "reason": "HtmlService web entry; no deployment and no Index.html in the disposable bundle",
+      "stub": "function doGet() { throw new Error('PHASEB08_STOP: web entry disabled in disposable QA bundle'); } // B08 QA-ONLY NEUTRALIZED"
+    },
+    {
+      "name": "savePdf",
+      "signature": "function savePdf(no, vatMode, b64, docType) {",
+      "sha256": "e3631960a74ff371c54575783e6799fd2771800a4c7da6018ba023171b1f8591",
+      "reason": "Only DriveApp/setSharing path in Code.gs; docType 'stock' reaches Drive without stagingDb_ (F-1)",
+      "stub": "function savePdf() { throw new Error('PHASEB08_STOP: PDF export and file sharing disabled in disposable QA bundle'); } // B08 QA-ONLY NEUTRALIZED"
+    }
+  ]
+}
